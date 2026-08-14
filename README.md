@@ -5,7 +5,7 @@
 ## 项目结构
 
 ```
-imx6ul-indaq/
+imx6ull-drivers/
 ├── Makefile               # 顶层编译调度
 ├── README.md              # 本文件
 ├── LEARN.md               # 学习指南（架构、数据流、功能框架详解）
