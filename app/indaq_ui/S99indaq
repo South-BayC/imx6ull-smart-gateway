@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# S99indaq - INDAQ startup: mount debugfs + launch UI
+#
+
+# Mount debugfs if not already mounted
+if ! mountpoint -q /sys/kernel/debug; then
+    mount -t debugfs none /sys/kernel/debug
+fi
+
+# Load kernel driver if not loaded
+if ! lsmod | grep -q indaq; then
+    insmod /lib/modules/4.1.15/indaq.ko
+    sleep 1
+fi
+
+# Start UI (fork to background)
+cd /root
+./indaq_ui &

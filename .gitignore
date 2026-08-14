@@ -1,0 +1,33 @@
+# ===== 编译产物 =====
+build/
+*.o
+*.ko
+*.mod
+*.mod.c
+*.order
+*.symvers
+*.cmd
+*.dtb
+*.dtb.tmp
+*.dts.tmp
+*.tmp
+
+# 用户态可执行产物
+indaq_ui
+app/indaq_test
+app/test_libdaq
+app/indaq_ui/indaq_ui
+
+# ===== 工具/Agent 生成目录 =====
+.codegraph/
+.omo/
+.understand-anything/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+
+# ===== 系统文件 =====
+Thumbs.db
+.DS_Store
+desktop.ini
