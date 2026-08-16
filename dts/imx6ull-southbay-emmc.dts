@@ -204,6 +204,17 @@
 		pinctrl-0 = <&pinctrl_key>;	/* KEY0: GPIO1_IO18 */
 		status = "okay";
 	};
+
+	/* ======== P2 按键事件驱动 ========
+	   与 indaq 节点共享 pinctrl_key 与 GPIO1_IO18：
+	   indaq 驱动已从源码删除，无 probe 不占用 GPIO，无实际冲突 */
+	key-event {
+		compatible = "alientek,key-event";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_key>;
+		key-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* KEY0 */
+		status = "okay";
+	};
 };
 
 &cpu0 {

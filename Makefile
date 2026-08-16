@@ -6,7 +6,7 @@
 CROSS_COMPILE ?= arm-linux-gnueabihf-
 BUILD_DIR := $(CURDIR)/build
 
-all: core dts
+all: core dts test
 
 core:
 	$(MAKE) -C core BUILD_DIR=$(BUILD_DIR)
@@ -14,9 +14,14 @@ core:
 dts:
 	$(MAKE) -C dts BUILD_DIR=$(BUILD_DIR)
 
+test:
+	$(MAKE) -C core BUILD_DIR=$(BUILD_DIR) test
+
 clean:
 	$(MAKE) -C core clean
 	$(MAKE) -C dts clean
 	rm -rf $(BUILD_DIR)
-
-.PHONY: all core dts clean
+send:
+	sudo cp ./build/module/*.ko /home/szh/linux/nfs/rootfs/lib/modules/4.1.15/ -f
+	sudo cp ./build/test/* /home/szh/linux/nfs/rootfs/lib/modules/4.1.15/ -f
+.PHONY: all core dts test clean

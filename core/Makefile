@@ -2,12 +2,16 @@
 # Kernel modules orchestrator — dispatches to each driver subdirectory.
 # Add new drivers to SUBDIRS as they are created (led, relay, key, ...).
 
-SUBDIRS := led
+SUBDIRS := led key_event
 
 all:
-	@for d in $(SUBDIRS); do $(MAKE) -C $$d || exit 1; done
+	@for d in $(SUBDIRS); do $(MAKE) -C $$d BUILD_DIR=$(BUILD_DIR) || exit 1; done
+
+# 编译各模块应用层测试程序到 build/test/
+test:
+	@for d in $(SUBDIRS); do $(MAKE) -C $$d BUILD_DIR=$(BUILD_DIR) test || exit 1; done
 
 clean:
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d clean || exit 1; done
 
-.PHONY: all clean
+.PHONY: all test clean

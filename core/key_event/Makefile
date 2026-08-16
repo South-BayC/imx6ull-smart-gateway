@@ -1,16 +1,16 @@
-obj-m += led_drv.o
+obj-m += key_event.o
 
 KDIR := /home/szh/linux/kernel/linux-imx-rel_imx_4.1.15_2.1.0_ga_southbay
 
 all:
 	make -C $(KDIR) M=$(CURDIR) ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 	mkdir -p $(BUILD_DIR)/module
-	cp led_drv.ko $(BUILD_DIR)/module/
+	cp key_event.ko $(BUILD_DIR)/module/
 
 # 应用层测试程序 → build/test/
 test:
 	mkdir -p $(BUILD_DIR)/test
-	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/led_test test/led_test.c -I uapi
+	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/key_test test/key_test.c -I uapi
 
 clean:
 	make -C $(KDIR) M=$(CURDIR) ARCH=arm clean
