@@ -2,7 +2,7 @@
 # Kernel modules orchestrator — dispatches to each driver subdirectory.
 # Add new drivers to SUBDIRS as they are created (led, relay, key, ...).
 
-SUBDIRS := led key_event
+SUBDIRS := led key_event gpio_event_capture
 
 all:
 	@for d in $(SUBDIRS); do $(MAKE) -C $$d BUILD_DIR=$(BUILD_DIR) || exit 1; done

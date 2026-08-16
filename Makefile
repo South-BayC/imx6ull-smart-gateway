@@ -24,4 +24,5 @@ clean:
 send:
 	sudo cp ./build/module/*.ko /home/szh/linux/nfs/rootfs/lib/modules/4.1.15/ -f
 	sudo cp ./build/test/* /home/szh/linux/nfs/rootfs/lib/modules/4.1.15/ -f
+	sudo cp ./build/dts/*.dtb /home/szh/linux/tftp/ -f
 .PHONY: all core dts test clean

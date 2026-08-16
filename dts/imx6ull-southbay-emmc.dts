@@ -215,6 +215,19 @@
 		key-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* KEY0 */
 		status = "okay";
 	};
+
+	/* ======== P3 gpio_event 多通道事件采集 ========
+	   通道 0 = KEY0（GPIO1_IO18），复用 pinctrl_key；
+	   与 key-event 互斥：两者共用同一 GPIO，运行时只能加载其一
+	   （P3 为 P2 的企业级演进，板端验证时先 rmmod key_event） */
+	gpio-event-capture {
+		compatible = "alientek,gpio-event-capture";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_key>;
+		capture-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* 通道0：KEY0 */
+		fifo-depth-events = <1024>;                    /* 2 的幂校验 */
+		status = "okay";
+	};
 };
 
 &cpu0 {
