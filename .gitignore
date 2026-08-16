@@ -11,12 +11,12 @@ build/
 *.dtb.tmp
 *.dts.tmp
 *.tmp
+Module.symvers
+modules.order
+.tmp_versions/
 
-# 用户态可执行产物
-indaq_ui
-app/indaq_test
-app/test_libdaq
-app/indaq_ui/indaq_ui
+# ===== 测试可执行文件（源码保留在 test/*.c） =====
+core/*/test/*_test
 
 # ===== 工具/Agent 生成目录 =====
 .codegraph/

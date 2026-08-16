@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-# Makefile for compiling INDAQ device tree
+# Makefile for compiling imx6ull-drivers device tree
 # Output goes to BUILD_DIR/dts/
 #
 # DTS files use #include (C preprocessor directive), so dtc alone won't work.
@@ -8,7 +8,7 @@
 #   2. dtc  — compile preprocessed .dts into .dtb
 
 KERNELDIR := /home/szh/linux/kernel/linux-imx-rel_imx_4.1.15_2.1.0_ga_southbay
-DTS := imx6ull-southbay-indaq.dts
+DTS := imx6ull-southbay-emmc.dts
 BUILD_DIR ?= $(CURDIR)/../build
 BUILD_DTS := $(BUILD_DIR)/dts
 DTS_TMP  := $(BUILD_DTS)/$(DTS:.dts=.dts.tmp)
