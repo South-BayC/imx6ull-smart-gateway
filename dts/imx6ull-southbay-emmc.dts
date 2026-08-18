@@ -213,18 +213,21 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_key>;
 		key-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* KEY0 */
-		status = "okay";
+		status = "disabled";   /* P3: 与 gpio_event_capture 共用 GPIO1_IO18，禁用避免冲突 */
 	};
 
 	/* ======== P3 gpio_event 多通道事件采集 ========
 	   通道 0 = KEY0（GPIO1_IO18），复用 pinctrl_key；
-	   与 key-event 互斥：两者共用同一 GPIO，运行时只能加载其一
+	   通道 1 = GPIO1_IO01（JP6 pin17 "GPIO_01"），复用 pinctrl_capture1；
+	   GPIO1_IO01 属于普通 GPIO1 控制器，支持边沿中断（优于 SNVS_TAMPER0）；
+	   与 key-event 互斥：两者共用 GPIO1_IO18，运行时只能加载其一
 	   （P3 为 P2 的企业级演进，板端验证时先 rmmod key_event） */
 	gpio-event-capture {
 		compatible = "alientek,gpio-event-capture";
 		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_key>;
-		capture-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* 通道0：KEY0 */
+		pinctrl-0 = <&pinctrl_key &pinctrl_capture1>;
+		capture-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>,   /* 通道0：KEY0 */
+				<&gpio1  1 GPIO_ACTIVE_LOW>;  /* 通道1：GPIO1_IO01 (JP6 pin17) */
 		fifo-depth-events = <1024>;                    /* 2 的幂校验 */
 		status = "okay";
 	};
@@ -657,6 +660,13 @@
 			>;
 		};
 
+		/* P3-2 通道1：GPIO1_IO01（JP6 pin17 "GPIO_01"）*/
+		pinctrl_capture1: capture1grp {
+			fsl,pins = <
+				MX6UL_PAD_GPIO1_IO01__GPIO1_IO01	0x10B0
+			>;
+		};
+
 		pinctrl_ecspi3: icm20608 {
 			fsl,pins = <
 				MX6UL_PAD_UART2_TX_DATA__GPIO1_IO20	0x10b0
@@ -726,6 +736,7 @@
 				MX6ULL_PAD_SNVS_TAMPER9__GPIO5_IO09	0x10B0
 			>;
 		};
+
 	};
 };
 

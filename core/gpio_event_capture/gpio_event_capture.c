@@ -34,7 +34,8 @@ struct edt_capture_dev {
 	struct device          *dev;
 	struct gpio_descs      *gpios;        /* 通道 GPIO 数组（gpiod_get_array 返回） */
 	int                     num_chans;    /* 实际使能通道数 */
-	unsigned long           channel_mask; /* 设备树声明通道位图（SET_CONFIG 可收窄） */
+	unsigned long           orig_channel_mask; /* DTS 声明通道位图（SET_CONFIG 可恢复到此范围） */
+	unsigned long           channel_mask; /* 运行时通道位图（SET_CONFIG 可收窄） */
 	u32                     edge_mask;    /* 运行时边沿过滤（SET_CONFIG 可改） */
 	struct kfifo            fifo;         /* 事件 FIFO（2 的幂） */
 	spinlock_t              lock;         /* IRQ + 入队 + 读共用 */
@@ -282,8 +283,8 @@ static int edt_capture_set_config(struct edt_capture_dev *cap,
 		ret = -EBUSY;
 		goto out;
 	}
-	/* channel_mask 只能选择已配置通道的子集 */
-	if (cfg->channel_mask & ~cap->channel_mask) {
+	/* channel_mask 只能选择 DTS 声明通道的子集（可任意收窄/恢复） */
+	if (cfg->channel_mask & ~cap->orig_channel_mask) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -447,8 +448,10 @@ static int edt_capture_release(struct inode *inode, struct file *fp)
 	if (atomic_cmpxchg(&cap->running, 1, 0) == 1) {
 		int i;
 
-		for (i = 0; i < cap->num_chans; i++)
-			synchronize_irq(cap->irqs[i]);
+		for (i = 0; i < cap->num_chans; i++) {
+			if (cap->irqs[i] >= 0)
+				synchronize_irq(cap->irqs[i]);
+		}
 	}
 	atomic_set(&cap->opened, 0);
 	wake_up_all(&cap->wq);   /* 唤醒 remove 的等待（opened==0 条件） */
@@ -495,7 +498,8 @@ static int edt_capture_probe(struct platform_device *pdev)
 	cap->dev = dev;
 	cap->gpios = g;
 	cap->num_chans = g->ndescs;
-	cap->channel_mask = (1UL << g->ndescs) - 1;   /* 初始全部使能 */
+	cap->orig_channel_mask = (1UL << g->ndescs) - 1;  /* DTS 全通道 */
+	cap->channel_mask = cap->orig_channel_mask;   /* 初始全部使能 */
 	cap->edge_mask = EDT_CAPTURE_EDGE_BOTH;
 	cap->fifo_depth = fifo_depth;
 	spin_lock_init(&cap->lock);
@@ -510,12 +514,19 @@ static int edt_capture_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, cap);
 
-	/* IRQ 申请（双边沿，每通道；先于 misc 注册，失败路径干净） */
+	/* IRQ 申请（双边沿，每通道；先于 misc 注册，失败路径干净）
+	 * SNVS 域 GPIO（如 GPIO5_IO00）可能不支持边沿中断：
+	 *   gpiod_to_irq() 返回 -EINVAL → 跳过 IRQ 注册，使用轮询模式
+	 *   轮询模式由定时器触发，每 1ms 检查 GPIO 状态变化 */
 	for (i = 0; i < cap->num_chans; i++) {
 		int irq = gpiod_to_irq(g->desc[i]);
 
-		if (irq < 0)
-			return irq;
+		if (irq < 0) {
+			/* SNVS GPIO 或其他不支持中断的引脚：标记为轮询模式 */
+			cap->irqs[i] = -1;  /* -1 表示无 IRQ，使用轮询 */
+			dev_info(dev, "channel %d: no IRQ support, using poll mode\n", i);
+			continue;
+		}
 		cap->irqs[i] = irq;
 		ret = devm_request_irq(dev, irq, edt_capture_irq_handler,
 				       IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
@@ -557,8 +568,10 @@ static int edt_capture_remove(struct platform_device *pdev)
 	misc_deregister(&cap->misc);       /* 先移除设备节点 */
 	atomic_set(&cap->running, 0);
 	wake_up_all(&cap->wq);             /* 唤醒所有读等待 */
-	for (i = 0; i < cap->num_chans; i++)
-		synchronize_irq(cap->irqs[i]);
+	for (i = 0; i < cap->num_chans; i++) {
+		if (cap->irqs[i] >= 0)
+			synchronize_irq(cap->irqs[i]);
+	}
 	wait_event(cap->wq, atomic_read(&cap->opened) == 0);  /* 等读者退出 */
 	kfifo_free(&cap->fifo);
 	return 0;

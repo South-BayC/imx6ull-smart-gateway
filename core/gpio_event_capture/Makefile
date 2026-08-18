@@ -16,6 +16,7 @@ test:
 	mkdir -p $(BUILD_DIR)/test
 	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/edt_capture_test test/edt_capture_test.c -I uapi
 	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/edt_capture_simtest test/edt_capture_simtest.c
+	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/edt_capture_bench test/edt_capture_bench.c -I uapi
 
 clean:
 	make -C $(KDIR) M=$(CURDIR) ARCH=arm clean

@@ -47,6 +47,15 @@ static int selftest(void)
 	if (fd < 0) { perror("open"); return 1; }
 	printf("== selftest on %s ==\n", DEV);
 
+	/* ⓪ 环境恢复：清残留 FIFO + 恢复全通道配置
+	   （SET_CONFIG 可能被上次运行污染 channel_mask，必须恢复干净状态） */
+	ioctl(fd, EDT_IOC_CLEAR_FIFO);
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.abi_version = EDT_CAPTURE_ABI_VERSION;
+	cfg.struct_size = sizeof(cfg);
+	cfg.channel_mask = 0;   /* 占位，GET_CAPS 后填全通道 */
+	cfg.edge_mask = EDT_CAPTURE_EDGE_BOTH;
+
 	/* ① GET_CAPS 版本/大小校验 */
 	CHECK(ioctl(fd, EDT_IOC_GET_CAPS, &caps) == 0, "GET_CAPS 调用成功");
 	CHECK(caps.abi_version == EDT_CAPTURE_ABI_VERSION,
@@ -62,6 +71,11 @@ static int selftest(void)
 	CHECK(caps.flags & EDT_CAPTURE_CAP_POLL, "CAP_POLL 置位");
 	CHECK(caps.flags & EDT_CAPTURE_CAP_EXCLUSIVE_OPEN, "CAP_EXCLUSIVE_OPEN 置位");
 	CHECK(caps.flags & EDT_CAPTURE_CAP_INITIAL_SNAPSHOT, "CAP_INITIAL_SNAPSHOT 置位");
+
+	/* 恢复全通道配置 + 清统计（保证 sequence 从 0 开始） */
+	cfg.channel_mask = (1UL << caps.configured_channels) - 1;
+	CHECK(ioctl(fd, EDT_IOC_SET_CONFIG, &cfg) == 0, "恢复全通道配置成功");
+	CHECK(ioctl(fd, EDT_IOC_RESET_STATS) == 0, "RESET_STATS 成功");
 
 	/* ② 重复 open → EBUSY（独占打开） */
 	fd2 = open(DEV, O_RDWR);
@@ -120,9 +134,10 @@ static int selftest(void)
 	cfg.edge_mask = EDT_CAPTURE_EDGE_BOTH;
 	CHECK(ioctl(fd, EDT_IOC_SET_CONFIG, &cfg) == -1 && errno == EINVAL,
 	      "SET_CONFIG channel_mask=0 → EINVAL");
-	cfg.channel_mask = 0x2;      /* 越界（configured=1） */
+	/* 越界 mask：使用 configured_channels 之上的位（动态适配多通道） */
+	cfg.channel_mask = 1UL << caps.configured_channels;
 	CHECK(ioctl(fd, EDT_IOC_SET_CONFIG, &cfg) == -1 && errno == EINVAL,
-	      "SET_CONFIG channel_mask=0x2 越界 → EINVAL");
+	      "SET_CONFIG channel_mask 越界 → EINVAL");
 	cfg.channel_mask = 0x1;
 	cfg.fifo_depth_events = 1000;   /* 非 2 的幂 */
 	CHECK(ioctl(fd, EDT_IOC_SET_CONFIG, &cfg) == -1 && errno == EINVAL,
@@ -147,7 +162,33 @@ static int selftest(void)
 	CHECK(st.abi_version == EDT_CAPTURE_ABI_VERSION,
 	      "RESET 保留 abi_version");
 
-	/* ⑫ 非法 ioctl → ENOTTY */
+	/* ⑫ fifo 深度切换（SET_CONFIG 重建路径：kfifo_alloc 锁外分配 + 重校验） */
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.abi_version = EDT_CAPTURE_ABI_VERSION;
+	cfg.struct_size = sizeof(cfg);
+	cfg.channel_mask = 0x1;
+	cfg.edge_mask = EDT_CAPTURE_EDGE_BOTH;
+	cfg.fifo_depth_events = 512;   /* 合法 2 的幂 → 重建 FIFO */
+	CHECK(ioctl(fd, EDT_IOC_SET_CONFIG, &cfg) == 0,
+	      "SET_CONFIG fifo=512 重建成功");
+	memset(&caps, 0, sizeof(caps));
+	CHECK(ioctl(fd, EDT_IOC_GET_CAPS, &caps) == 0, "GET_CAPS 成功（重建后）");
+	CHECK(caps.fifo_depth_events == 512, "GET_CAPS fifo_depth == 512");
+	CHECK(ioctl(fd, EDT_IOC_START) == 0, "START 成功（重建后 FIFO）");
+	n = read(fd, &ev, sizeof(ev));
+	CHECK(n == (ssize_t)sizeof(ev), "重建后快照可读");
+	if (n == (ssize_t)sizeof(ev)) {
+		CHECK(ev.channel == 0 && ev.edge == 0, "重建后快照语义正确");
+		printf("      快照: "); print_ev(&ev);
+	}
+	CHECK(ioctl(fd, EDT_IOC_STOP) == 0, "STOP 成功");
+	cfg.fifo_depth_events = 1024;   /* 恢复原深度 */
+	CHECK(ioctl(fd, EDT_IOC_SET_CONFIG, &cfg) == 0,
+	      "SET_CONFIG fifo=1024 恢复");
+	CHECK(ioctl(fd, EDT_IOC_GET_CAPS, &caps) == 0, "GET_CAPS 成功（恢复后）");
+	CHECK(caps.fifo_depth_events == 1024, "GET_CAPS fifo_depth == 1024");
+
+	/* ⑬ 非法 ioctl → ENOTTY */
 	CHECK(ioctl(fd, 0xDEAD) == -1 && errno == ENOTTY, "非法 cmd → ENOTTY");
 
 	close(fd);
@@ -221,6 +262,9 @@ static int interactive(int mode)
 
 int main(int argc, char *argv[])
 {
+	/* stdout 无缓冲：事件行即时落盘，防脚本 kill 时全缓冲丢失 */
+	setvbuf(stdout, NULL, _IONBF, 0);
+
 	if (argc > 1 && strcmp(argv[1], "--selftest") == 0)
 		return selftest();
 	if (argc > 1 && strcmp(argv[1], "--nonblock") == 0)
