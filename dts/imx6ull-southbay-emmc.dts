@@ -51,6 +51,14 @@
 		status = "okay";
 	};
 
+	/* P4-B：PWM 蜂鸣器（外接无源蜂鸣器 → GPIO1_IO04/PWM3_OUT，官方引脚）
+	 * period = 1ms = 1kHz，频率由 beep_pwm 驱动 ioctl 动态调整 */
+	beep_pwm {
+		compatible = "alientek,beep-pwm";
+		pwms = <&pwm3 0 1000000>;
+		status = "okay";
+	};
+
 	pxp_v4l2 {
 		compatible = "fsl,imx6ul-pxp-v4l2", "fsl,imx6sx-pxp-v4l2", "fsl,imx6sl-pxp-v4l2";
 		status = "okay";
@@ -499,6 +507,18 @@
 			>;
 		};
 
+		/* P4-B：PWM3（GPIO1_IO04）驱动外接无源蜂鸣器
+		 * ★PWM3 官方引脚 = GPIO1_IO04：NXP SDK evkmcimx6ull/driver_examples/pwm/pin_mux.c
+		 *   确认（pin M16, peripheral PWM3, pin_signal GPIO1_IO04），与 6UL pinfunc 宏
+		 *   MX6UL_PAD_GPIO1_IO04__PWM3_OUT（mux=0x006C, conf=0x02F8, ALT1）一致。
+		 * ★曾误推断 GPIO1_IO10=PWM3_OUT（BSP 缺定义按 IO08 布局推算）——实际 GPIO1_IO10
+		 *   非 PWM 引脚，PWM 信号未输出到接线引脚，致 LED 常亮/蜂鸣器不响；已按官方修正。 */
+		pinctrl_pwm3: pwm3grp {
+			fsl,pins = <
+				MX6UL_PAD_GPIO1_IO04__PWM3_OUT   0x110b0
+			>;
+		};
+
 		pinctrl_qspi: qspigrp {
 			fsl,pins = <
 				MX6UL_PAD_NAND_WP_B__QSPI_A_SCLK      0x70a1
@@ -775,6 +795,13 @@
 &pwm1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_pwm1>;
+	status = "okay";
+};
+
+/* P4-B：PWM3 供 beep_pwm 驱动使用 */
+&pwm3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_pwm3>;
 	status = "okay";
 };
 
