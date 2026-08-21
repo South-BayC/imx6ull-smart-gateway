@@ -6,26 +6,44 @@
 
 ```
 imx6ull-drivers/
-├── Makefile               # 顶层编译调度（core + dts）
+├── Makefile               # 顶层编译调度（core + dts + test + protocol）
 ├── README.md              # 本文件
-├── core/                  # 核心驱动模块
-│   └── led/               # [P1] LED 字符设备驱动（miscdevice + gpiod）
-│       ├── led_drv.c      # 驱动源码
-│       ├── Makefile
-│       ├── uapi/led_uapi.h  # 用户态接口头文件（ioctl 定义）
-│       └── test/led_test.c  # 测试程序
-└── dts/                   # 设备树源码
-    ├── Makefile
-    └── imx6ull-southbay-emmc.dts
+├── core/                  # 核心驱动模块（每个含五件套：源码/UAPI/Makefile/dts/测试）
+│   ├── led/               # [P1] LED 字符设备驱动（miscdevice + gpiod，/dev/led）
+│   ├── key_event/         # [P2] 按键中断驱动（阻塞/非阻塞/poll 三种读模式，/dev/key-event）
+│   ├── gpio_event_capture/# [P3] 多通道事件采集驱动（kfifo + 时间戳 + 统计 + tracepoint，/dev/edt_capture0）
+│   │   ├── uapi/edt_capture.h    # 用户态接口（ABI v2，8 通道，16 字节事件）
+│   │   ├── trace/                # 模块内 tracepoint（irq/enqueue/drop/read）
+│   │   └── test/edt_capture_test.c  # 语义断言 selftest（47 项）+ 交互读模式
+│   ├── pwm_beep/         # [P4] PWM 蜂鸣器驱动（/dev/beep_pwm0）
+│   ├── ap3216c/          # [P4] I2C 环境光/接近传感器驱动（/dev/ap3216c0）
+│   ├── icm20608/         # [P4] SPI 六轴 IMU 驱动（/dev/icm20608）
+│   └── key_input/        # [P6-1] input 子系统按键驱动（/dev/input/eventX）
+├── protocol/             # [P6-2] SUMP 逻辑分析仪工具链（PulseView 连接）
+│   ├── capture_source.h/.c       # 数据源抽象（edt_capture 后端 + sim 合成源）
+│   ├── event_reconstructor.h/.c  # 边沿事件 → 固定采样率网格重建
+│   ├── sump_server.c             # SUMP 协议服务器（TCP:9527）
+│   ├── sump_selftest.c           # 协议自测客户端（模拟 sigrok 流程）
+│   ├── Makefile                  # 交叉编译 + host（PC 自测）双目标
+│   └── README.md                 # PulseView 连接指南 + 等效采样率限制声明
+├── dts/                   # 设备树源码
+│   └── imx6ull-southbay-emmc.dts
+├── benchmark/             # [P6] 基准方法学（README.md，结果表待板端实测填写）
+├── docs/                  # 每驱动设计文档 + 架构决策
+└── build/                 # 编译产物（module/ test/ protocol/ dts/，git 忽略）
 ```
 
 ## 快速使用
 
 ```bash
-make              # 编译驱动模块 + 设备树
-make core         # 只编译核心驱动
+make              # 一键全编：core 驱动 + dts + 测试程序 + protocol 工具链
+make core         # 只编译核心驱动模块
 make dts          # 只编译设备树
+make test         # 编译用户态测试程序
+make protocol     # 编译 SUMP 工具链（交叉版）
+make -C protocol host  # SUMP 工具链 PC 自测版（--sim 无需板端）
 make clean        # 清理全部编译产物
+make send         # 部署：.ko/.test/sump 产物 → NFS rootfs，.dtb → TFTP
 ```
 
 ## 环境
@@ -33,12 +51,27 @@ make clean        # 清理全部编译产物
 - 内核：4.1.15（KDIR=/home/szh/linux/kernel/linux-imx-rel_imx_4.1.15_2.1.0_ga_southbay）
 - 交叉编译链：arm-linux-gnueabihf-
 - 开发模式：NFS rootfs（/home/szh/linux/nfs/rootfs）+ TFTP（/home/szh/linux/tftp/）
+- 更多环境信息见 `项目进度.md`（D:\Desktop\举目长安\嵌入式Linux\）
 
 ## 进度
 
-- [x] P1 LED 字符设备驱动（/dev/led，ioctl 控制）
-- [ ] P2 按键中断驱动
-- [ ] P3 gpio_event 企业级驱动
-- [ ] P4 PWM/I2C/SPI 子系统驱动
-- [ ] P5 OV5640 V4L2 subdev 驱动
-- [ ] P6 input 子系统 + SUMP 工具链
+- [x] P1 LED 字符设备驱动（/dev/led，ioctl 控制，验收 4/4）
+- [x] P2 按键中断驱动（三种读模式，验收 5/5）
+- [x] P3 gpio_event 企业级驱动（多通道/kfifo/统计/tracepoint，验收 7/7 + 内核重编 ftrace）
+- [x] P4 PWM/I2C/SPI 子系统驱动（beep_pwm/ap3216c/icm20608，验收 8/8 + git d7b56ed）
+- [ ] P5 OV5640 V4L2 subdev 驱动（待摄像头到货）
+- [x] P6-1 input 子系统按键驱动（/dev/input/eventX，验收 PASS=10 FAIL=0，2026-08-20）
+- [x] P6-2 SUMP 工具链开发完成（protocol/ 四件套 + 文档，2026-08-20；编译与板端验收待执行）
+- [ ] P6-3 SUMP 板端验收（PulseView 连接 8 通道 + I2C 解码 + 1M 样本无丢包）
+- [ ] P6 最终交付（基准报告 + 全驱动演示 + git 提交）
+
+## 验收
+
+各阶段验收脚本与清单见 `项目进度.md` 对应章节（P3/P4 验收脚本位于对应驱动 test/ 目录）。
+
+## 文档
+
+- `项目进度.md`（D:\Desktop\举目长安\嵌入式Linux\）—— 进度/验收/决策/问题记录
+- `docs/` —— 每驱动设计文档 + 架构决策（自研 gpio_event vs input 子系统对比等）
+- `protocol/README.md` —— SUMP 工具链使用指南
+- `benchmark/README.md` —— 全量基准方法学

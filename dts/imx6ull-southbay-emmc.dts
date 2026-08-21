@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * imx6ull-alientek-indaq.dts
+ * imx6ull-southbay-emmc.dts
  *
- * Based on alientek-emmc reference board DTS.
- * Added: INDAQ platform device node + "atomic,imx6ul-indaq" compatible.
+ * 基于正点原子 alientek-emmc 参考板 DTS 定制。
+ * 本文件为本项目（imx6ull-drivers，P1-P6）的唯一设备树，
+ * 各阶段驱动节点集中于此：led/beep_pwm/key_event/key_input/gpio_event_capture/ap3216c/icm20608。
  *
  * Build:
- *   dtc -I dts -O dtb -o imx6ull-alientek-indaq.dtb \
- *       -i <KERNEL>/arch/arm/boot/dts/ \
- *       -i <KERNEL>/include/ \
- *       imx6ull-alientek-indaq.dts
+ *   make KDIR=<kernel> ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- imx6ull-southbay-emmc.dtb
  */
 
 /dts-v1/;
@@ -18,9 +16,8 @@
 #include "imx6ull.dtsi"
 
 / {
-	model = "Freescale i.MX6 ULL 14x14 EVK Board + INDAQ";
-	compatible = "fsl,imx6ull-14x14-evk", "atomic,imx6ul-indaq",
-		     "fsl,imx6ull";
+	model = "Freescale i.MX6 ULL 14x14 EVK Board (SouthBay)";
+	compatible = "fsl,imx6ull-14x14-evk", "fsl,imx6ull";
 
 	chosen {
 		stdout-path = &uart1;
@@ -150,29 +147,7 @@
 		};
 	};
 
-	/* User LED (raw register access) */
-	userled {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		compatible = "user-led";
-		status = "okay";
-		reg = <0x020C406C 0x04
-		       0x020E0068 0x04
-		       0x020E02F4 0x04
-		       0x0209C000 0x04
-		       0x0209C004 0x04>;
-	};
-
-	gpioled {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		compatible = "user-gpioled";
-		pinctrl-name = "default";
-		pinctrl-0 = <&pinctrl_led>;
-		led-gpio = <&gpio1 3 GPIO_ACTIVE_LOW>;
-		status = "okay";
-	};
-
+	/* LED 驱动（P1，手册 5.10）：LED0 红灯 GPIO1_IO03，低电平点亮 */
 	led {
 		compatible = "alientek,led";
 		pinctrl-names = "default";
@@ -181,41 +156,9 @@
 		status = "okay";
 	};
 
-	beep {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		compatible = "user-beep";
-		pinctrl-name = "default";
-		pinctrl-0 = <&pinctrl_beep>;
-		beep-gpio = <&gpio5 1 GPIO_ACTIVE_HIGH>;
-		status = "okay";
-	};
-
-	/* dtsleds 节点已注释：原占用 GPIO1_IO03 作为心跳 LED，
-	   现释放该引脚给 led 驱动（红灯 LED0）使用，避免 GPIO 冲突 */
-	/* dtsleds {
-		compatible = "gpio-leds";
-		led0 {
-			label = "led0";
-			gpios = <&gpio1 3 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "heartbeat";
-			default-state = "on";
-		};
-	}; */
-
-	/* ======== INDAQ Platform Device ======== */
-	indaq {
-		compatible = "atomic,imx6ul-indaq";
-		indaq,sampling-rate = <1000>;
-		indaq,trigger-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;  /* KEY0 button */
-		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_key>;	/* KEY0: GPIO1_IO18 */
-		status = "okay";
-	};
-
 	/* ======== P2 按键事件驱动 ========
-	   与 indaq 节点共享 pinctrl_key 与 GPIO1_IO18：
-	   indaq 驱动已从源码删除，无 probe 不占用 GPIO，无实际冲突 */
+	   key-event / key-input / gpio-event-capture 共用 pinctrl_key 与
+	   GPIO1_IO18（KEY0），三者互斥（详见各节点注释） */
 	key-event {
 		compatible = "alientek,key-event";
 		pinctrl-names = "default";
@@ -224,18 +167,39 @@
 		status = "disabled";   /* P3: 与 gpio_event_capture 共用 GPIO1_IO18，禁用避免冲突 */
 	};
 
-	/* ======== P3 gpio_event 多通道事件采集 ========
+/* ======== P6 input 子系统按键驱动（手册 5.15.1）========
+	   与 gpio-event-capture / key-event 共用 GPIO1_IO18（KEY0），
+	   三者互斥：运行时只能加载其一（GPIO 已被占用时 probe 失败）。
+	   验证 input 时：dts 将本节点改 okay + gpio-event-capture 改 disabled，
+	   重编 dtb 后加载 key_input.ko；或运行时先 rmmod gpio_event_capture。
+	   key_code=227(KEY_ARMED)，可用 evtest / key_input_test 读取事件流 */
+	key-input {
+		compatible = "alientek,key-input";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_key>;
+		key-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* KEY0 */
+		linux,code = <227>;                        /* KEY_ARMED */
+		status = "disabled";   /* P6-2: 与 gpio-event-capture 互斥，板验 8 通道时禁用 */
+	};
+
+	/* ======== P3/P6-2 gpio_event 多通道事件采集 ========
 	   通道 0 = KEY0（GPIO1_IO18），复用 pinctrl_key；
 	   通道 1 = GPIO1_IO01（JP6 pin17 "GPIO_01"），复用 pinctrl_capture1；
-	   GPIO1_IO01 属于普通 GPIO1 控制器，支持边沿中断（优于 SNVS_TAMPER0）；
-	   与 key-event 互斥：两者共用 GPIO1_IO18，运行时只能加载其一
-	   （P3 为 P2 的企业级演进，板端验证时先 rmmod key_event） */
+	   通道 2 = GPIO1_IO00（JP6 GPIO_00），复用 pinctrl_capture0；
+	   通道 3 = GPIO1_IO02（JP6 GPIO_02），复用 pinctrl_capture2；
+	   ★按需采集原则：仅配置无冲突通道（IO18/IO01/IO00/IO02），
+	   触摸屏(gt9147)/LED/PWM 等外设功能全部保留（其引脚不再用作采集通道）。
+	   PulseView 仍显示 8 通道，未配置通道（4-7）为恒低平线。
+	   与 key-input / key-event 互斥：共用 GPIO1_IO18，dts 仅允许其一为 okay。 */
 	gpio-event-capture {
 		compatible = "alientek,gpio-event-capture";
 		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_key &pinctrl_capture1>;
+		pinctrl-0 = <&pinctrl_key &pinctrl_capture1
+			     &pinctrl_capture0 &pinctrl_capture2>;
 		capture-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>,   /* 通道0：KEY0 */
-				<&gpio1  1 GPIO_ACTIVE_LOW>;  /* 通道1：GPIO1_IO01 (JP6 pin17) */
+				<&gpio1  1 GPIO_ACTIVE_LOW>,  /* 通道1：GPIO1_IO01 (JP6 pin17) */
+				<&gpio1  0 GPIO_ACTIVE_LOW>,  /* 通道2：GPIO1_IO00 (JP6 GPIO_00) */
+				<&gpio1  2 GPIO_ACTIVE_LOW>;  /* 通道3：GPIO1_IO02 (JP6 GPIO_02) */
 		fifo-depth-events = <1024>;                    /* 2 的幂校验 */
 		status = "okay";
 	};
@@ -668,12 +632,6 @@
 			>;
 		};
 
-		pinctrl_beep: beepgrp {
-			fsl,pins = <
-				MX6ULL_PAD_SNVS_TAMPER1__GPIO5_IO01	0x10B0
-			>;
-		};
-
 		pinctrl_key: keygrp {
 			fsl,pins = <
 				MX6UL_PAD_UART1_CTS_B__GPIO1_IO18	0xF080
@@ -684,6 +642,21 @@
 		pinctrl_capture1: capture1grp {
 			fsl,pins = <
 				MX6UL_PAD_GPIO1_IO01__GPIO1_IO01	0x10B0
+			>;
+		};
+
+		/* P6-2 通道2-3：JP6 排针 GPIO_00/02（均属 GPIO1 控制器，支持边沿中断；
+   P3-2 已确认 GPIO_0~9 均为 GPIO1 组）。按需采集原则：仅配置无冲突引脚，
+   触摸屏/LED/PWM 等外设引脚（IO03/04/08/09）不再用作采集通道 */
+		pinctrl_capture0: capture0grp {
+			fsl,pins = <
+				MX6UL_PAD_GPIO1_IO00__GPIO1_IO00	0x10B0
+			>;
+		};
+
+		pinctrl_capture2: capture2grp {
+			fsl,pins = <
+				MX6UL_PAD_GPIO1_IO02__GPIO1_IO02	0x10B0
 			>;
 		};
 
