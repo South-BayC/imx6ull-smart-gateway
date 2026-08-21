@@ -304,7 +304,7 @@
 };
 
 &i2c2 {
-	clock_frequency = <100000>;
+	clock-frequency = <100000>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_i2c2>;
 	status = "okay";
@@ -329,8 +329,11 @@
 		};
 	};
 
+	/* 触摸屏 GT911/GT9147（教程 64.8 规范节点，配套 23_multitouch/gt9147.c；
+	 * 地址 0x14、引脚/属性/时序全部对齐教程；分辨率 1024x600 由驱动
+	 * 内嵌官方配置下发——本板芯片出厂配置区为空） */
 	gt9147: gt9147@14 {
-		compatible = "goodix,gt9147", "goodix,g79xx";
+		compatible = "goodix,gt9147", "goodix,gt9xx";
 		reg = <0x14>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_tsc
