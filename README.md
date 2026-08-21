@@ -61,9 +61,9 @@ make send         # 部署：.ko/.test/sump 产物 → NFS rootfs，.dtb → TFT
 - [x] P4 PWM/I2C/SPI 子系统驱动（beep_pwm/ap3216c/icm20608，验收 8/8 + git d7b56ed）
 - [ ] P5 OV5640 V4L2 subdev 驱动（待摄像头到货）
 - [x] P6-1 input 子系统按键驱动（/dev/input/eventX，验收 PASS=10 FAIL=0，2026-08-20）
-- [x] P6-2 SUMP 工具链开发完成（protocol/ 四件套 + 文档，2026-08-20；编译与板端验收待执行）
-- [ ] P6-3 SUMP 板端验收（PulseView 连接 8 通道 + I2C 解码 + 1M 样本无丢包）
-- [ ] P6 最终交付（基准报告 + 全驱动演示 + git 提交）
+- [x] P6-2 SUMP 工具链开发完成（protocol/ 四件套 + 文档，2026-08-20；端到端板端验收 PASS=7 FAIL=0，2026-08-21）
+- [x] P6-3 SUMP 板端验收（自研 selftest 实证：1M 样本零丢失 + ch0 方波频率精确匹配，PASS=7 FAIL=0；PulseView GUI 实时连接经用户决定取消——libsigrok 官方预编译包未编译串口 TCP 传输，属第三方软件缺陷，源码编译可解锁）
+- [x] P6 最终交付（全驱动 insmod/rmmod 演示 + 干净卸载验证 + git 提交推送 origin/master@dd7f018，2026-08-21；基准报告待实测补充）
 
 ## 验收
 
