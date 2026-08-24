@@ -9,6 +9,7 @@
  *   /sys/class/leds/beep/brightness   板载蜂鸣器跟随告警状态（出厂 dts gpio-leds）
  */
 #include "dev_bridge.h"
+#include "cam_feed.h"
 #include "ui/ui_events.h"
 #include "lvgl/lvgl.h"
 
@@ -401,6 +402,19 @@ static void bridge_timer_cb(lv_timer_t *t)
         if (now - g_zone_last_trigger[i] < g_cfg.cooldown_sec) continue;
         g_zone_last_trigger[i] = now;
         ui_events_alarm_trigger_src(i, "SENSOR");
+    }
+
+    /* --- 运动粗判命中（当前预览通道对应分区，布防中+冷却，MOTION 触发） ---
+     * 单摄分时切换语义：运动发生在当前预览通道，告警归属其对应分区；
+     * 精判路径按识别模式（云端上传/本地 NCNN）后续挂接，此处先触发告警 */
+    int mh = cam_feed_get_motion_hits();
+    if (mh > 0) {
+        int z = ui_events_current_cam_zone();
+        if (z >= 0 && ui_events_zone_is_armed(z)
+            && now - g_zone_last_trigger[z] >= g_cfg.cooldown_sec) {
+            g_zone_last_trigger[z] = now;
+            ui_events_alarm_trigger_src(z, "MOTION");
+        }
     }
 
     /* --- 告警分级声光（设计 2.2：高=快闪+长鸣 中=中闪+断鸣 低=慢闪+短鸣） ---

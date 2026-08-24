@@ -207,6 +207,13 @@ static int       g_alarm_zone        = -1;    /* 告警分区索引 */
 static uint8_t g_cam_canvas_buf[CAM_DISP_W * CAM_DISP_H * 2];
 static lv_obj_t *g_cam_canvas = NULL;       /* canvas 对象 */
 
+/* 入侵判别模式（设计：云端精判=粗判+上传 / 本地精判=粗判+NCNN） */
+#define DETECT_MODE_CLOUD  0
+#define DETECT_MODE_LOCAL  1
+static int g_detect_mode = DETECT_MODE_CLOUD;   /* 默认云端精判 */
+static lv_obj_t *g_mode_badge_lbl = NULL;       /* 摄像头区模式徽章（联动） */
+static lv_obj_t *g_dm_btns[2] = {NULL, NULL};   /* 设置弹窗模式按钮组 */
+
 /* ================================================================
  * 抓拍存储（真实画面）：全图（查看弹窗）+ 缩略图（相册 3×2）
  * 触发：抓拍按钮（手动）/ 预警触发（自动）；超出 6 张环形覆盖最旧
@@ -1167,7 +1174,7 @@ static void _build_cam_wrap(lv_obj_t *par)
         lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
         lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-        /* mode-badge：仅保留"云端精判模式"，避免一行过挤 */
+        /* mode-badge：识别模式徽章（设置页切换 云端精判/本地精判 后联动） */
         lv_obj_t *badge = uiw_obj(hdr);
         if (badge) {
             lv_obj_set_size(badge, LV_SIZE_CONTENT, 26);
@@ -1179,8 +1186,8 @@ static void _build_cam_wrap(lv_obj_t *par)
             lv_obj_set_style_pad_left(badge, 8, 0);
             lv_obj_set_style_pad_right(badge, 8, 0);
             lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
-            /* 自适应宽度完整显示 */
-            uiw_label(badge, "云端精判模式",
+            /* 自适应宽度完整显示；label 指针保存供模式切换联动 */
+            g_mode_badge_lbl = uiw_label(badge, "云端精判模式",
                       CLR_CYAN);
         }
 
@@ -1579,6 +1586,28 @@ static void _on_volume_cb(lv_event_t *e)
         snprintf(b, sizeof(b), "%d%%", g_volume);
         lv_label_set_text(g_vol_lbl, b);
     }
+}
+
+/* ---- 识别模式（云端精判=粗判+上传 / 本地精判=粗判+NCNN，设置页切换联动徽章） ---- */
+static void _on_dm_sel(lv_event_t *e)
+{
+    g_detect_mode = (int)(intptr_t)lv_event_get_user_data(e);
+    _dm_refresh();
+}
+
+static void _dm_refresh(void)
+{
+    for (int i = 0; i < 2; i++) {
+        if (!g_dm_btns[i]) continue;
+        int active = (i == g_detect_mode);
+        lv_obj_set_style_bg_opa(g_dm_btns[i], active ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_t *l = lv_obj_get_child(g_dm_btns[i], 0);
+        if (l) lv_obj_set_style_text_color(l, active ? lv_color_hex(0xFFFFFF) : lv_color_hex(CLR_CYAN), 0);
+    }
+    /* 摄像头区 mode-badge 联动 */
+    if (g_mode_badge_lbl)
+        lv_label_set_text(g_mode_badge_lbl,
+                          g_detect_mode == DETECT_MODE_LOCAL ? "本地精判模式" : "云端精判模式");
 }
 
 /* ---- 预警设置（四位置 × 触发源 × 数据通道 × 阈值，写入 dev_bridge 实时生效） ---- */
@@ -1982,6 +2011,40 @@ static void _build_settings_modal(void)
             uiw_label(row, levels[r].name, CLR_TEXT_HI);
             uiw_label(row, levels[r].desc, CLR_TEXT_DIM);
         }
+    }
+
+    /* --- 识别设置（双模式选择：云端精判=粗判+上传 / 本地精判=粗判+NCNN） --- */
+    uiw_label(body, "识别设置", CLR_TEXT_DIM);
+    {
+        lv_obj_t *dm_row = uiw_obj(body);
+        if (dm_row) {
+            lv_obj_set_size(dm_row, 368, LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(dm_row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(dm_row, LV_FLEX_ALIGN_START,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_gap(dm_row, 8, 0);
+            lv_obj_set_style_pad_bottom(dm_row, 4, 0);
+            uiw_label(dm_row, "MODE", CLR_TEXT_DIM);
+            const char *dm_names[2] = { "云端精判", "本地精判" };
+            for (int i = 0; i < 2; i++) {
+                lv_obj_t *b = lv_button_create(dm_row);
+                if (!b) continue;
+                lv_obj_set_size(b, LV_SIZE_CONTENT, 28);
+                lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_border_color(b, lv_color_hex(CLR_BORDER), 0);
+                lv_obj_set_style_border_width(b, 1, 0);
+                lv_obj_set_style_radius(b, 0, 0);
+                lv_obj_set_style_pad_left(b, 10, 0);
+                lv_obj_set_style_pad_right(b, 10, 0);
+                lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_t *l = uiw_label(b, dm_names[i], CLR_CYAN);
+                if (l) lv_obj_center(l);
+                lv_obj_add_event_cb(b, _on_dm_sel, LV_EVENT_CLICKED,
+                                   (void *)(intptr_t)i);
+                g_dm_btns[i] = b;
+            }
+        }
+        _dm_refresh();   /* 初始高亮 + 徽章联动 */
     }
 
     /* --- 预警设置（四位置 × 触发源 × 数据通道 × 阈值） --- */
@@ -2540,6 +2603,13 @@ static void _on_test_imu_toggle(lv_event_t *e)
     dev_bridge_set_imu_en(!en);
 }
 
+static void _on_test_motion_toggle(lv_event_t *e)
+{
+    (void)e;
+    int en = cam_feed_get_motion_en();
+    cam_feed_set_motion_en(!en);   /* 运动粗判开关（关闭后不产生命中） */
+}
+
 /* 小尺寸按钮助手 */
 static lv_obj_t *_mini_btn(lv_obj_t *par, const char *txt, uint32_t clr,
                            lv_event_cb_t cb)
@@ -2566,10 +2636,11 @@ static void _refresh_test_modal(void)
     dev_bridge_get_diag(&d);
 
     char buf[64];
-    /* 行 0: LED / KEY */
-    snprintf(buf, sizeof(buf), "LED:%s KEY:%s",
+    /* 行 0: LED / KEY / MOTION（运动粗判使能状态） */
+    snprintf(buf, sizeof(buf), "LED:%s KEY:%s MOT:%s",
              d.led_ok ? (d.led_on ? "ON " : "OFF") : "ERR",
-             d.key_ok ? (d.key_pressed ? "DN " : "UP ") : "ERR");
+             d.key_ok ? (d.key_pressed ? "DN " : "UP ") : "ERR",
+             cam_feed_get_motion_en() ? "ON " : "OFF");
     if (g_test_lbls[0]) lv_label_set_text(g_test_lbls[0], buf);
 
     /* 行 1: BEEP / PWM（显示 ON/OFF + 频率，设备不在显示 ERR） */
@@ -2647,6 +2718,7 @@ static void _build_test_modal(void)
         _mini_btn(ctl, "PWM",      CLR_AMBER, _on_test_pwm_toggle);
         _mini_btn(ctl, "AP3216C",  CLR_CYAN,  _on_test_als_toggle);
         _mini_btn(ctl, "ICM20608", CLR_CYAN,  _on_test_imu_toggle);
+        _mini_btn(ctl, "MOTION",   CLR_GREEN, _on_test_motion_toggle);
     }
 
     /* PWM 频率滑条行 */
@@ -3199,6 +3271,13 @@ int ui_events_zone_is_armed(int id)
 {
     if (id < 0 || id >= ZONE_COUNT) return 0;
     return (g_zone_states[id] == ZONE_ARMED) ? 1 : 0;
+}
+
+int ui_events_current_cam_zone(void)
+{
+    /* 单摄分时切换：当前预览通道映射分区（cam_to_zone: 前门=0 后门=1 仓库=3 窗户=2） */
+    if (g_current_cam < 0 || g_current_cam >= CAM_COUNT) return -1;
+    return cam_to_zone[g_current_cam];
 }
 
 int ui_events_zone_has_alarm(void)

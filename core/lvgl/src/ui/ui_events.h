@@ -95,6 +95,13 @@ int ui_events_zone_has_armed(void);
 int ui_events_zone_is_armed(int id);
 
 /**
+ * 查询当前预览通道对应的分区索引（单摄分时切换语义）
+ * @return 分区索引 0-3；异常返回 -1
+ * 运动粗判命中时，告警归属当前预览通道对应的分区
+ */
+int ui_events_current_cam_zone(void);
+
+/**
  * 查询是否有任一分区处于告警（外设联动用，如蜂鸣器）
  * @return 1=有告警 0=无告警
  */

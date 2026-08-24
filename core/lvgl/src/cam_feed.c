@@ -63,6 +63,83 @@ static int s_started = 0;
 static volatile int s_fps_val = 0;     /* 实测帧率（每秒结算） */
 static int s_fps_cnt = 0;              /* 当前秒帧计数 */
 
+/* ---- 运动检测粗判引擎（入侵判别第一级，帧差法） ----
+ * 算法: RGB565 帧 → 降采样 80×50 灰度 → 与前帧逐像素差值
+ *       → 差值 > DIFF_TH 的像素占比 > RATIO_TH → 计一次命中（防抖 MOTION_DEBOUNCE 次）
+ * 内存: 降采样缓冲 2×8KB 静态；开销 ~0.5ms/帧 */
+#define MD_W           80
+#define MD_H           50
+#define MD_DIFF_TH     24     /* 像素灰度差阈值（0-255） */
+#define MD_RATIO_PCT   5      /* 变化像素占比阈值 %（全画面 5%） */
+#define MD_DEBOUNCE    2      /* 连续 N 次超限 → 命中 */
+
+static uint8_t md_prev[MD_W * MD_H];   /* 前帧降采样灰度 */
+static uint8_t md_cur[MD_W * MD_H];    /* 当前帧降采样灰度 */
+static int md_prev_valid = 0;
+static int md_cnt = 0;
+static volatile int s_motion_en = 1;   /* 运动检测使能（默认开） */
+static volatile int s_motion_hits = 0; /* 命中计数（消费端读取清零） */
+static volatile int s_motion_ratio = MD_RATIO_PCT; /* 变化占比阈值 %（可调） */
+
+/* ---- 公开接口（cam_feed.h 声明；非 static 供 UI/桥接层调用） ---- */
+void cam_feed_set_motion_en(int en) { s_motion_en = en ? 1 : 0; }
+int  cam_feed_get_motion_en(void)  { return s_motion_en; }
+int  cam_feed_get_motion_hits(void)
+{
+    int v = s_motion_hits;
+    s_motion_hits = 0;
+    return v;
+}
+void cam_feed_set_motion_threshold(int pct)
+{
+    if (pct < 1) pct = 1;
+    if (pct > 50) pct = 50;
+    s_motion_ratio = pct;
+}
+int cam_feed_get_motion_threshold(void) { return s_motion_ratio; }
+
+/* RGB565 → 降采样灰度（G 通道近似亮度） */
+static void md_downsample(const uint8_t *frame, uint8_t *out)
+{
+    for (int y = 0; y < MD_H; y++) {
+        const uint16_t *sline = (const uint16_t *)frame + (y * CAM_DISP_H / MD_H) * CAM_DISP_W;
+        for (int x = 0; x < MD_W; x++) {
+            uint16_t px = sline[x * CAM_DISP_W / MD_W];
+            out[y * MD_W + x] = (uint8_t)((px >> 5) & 0x3F);   /* G 高 6 位 */
+        }
+    }
+}
+
+/* 帧差判定（每帧转换后调用） */
+static void motion_detect(void)
+{
+    if (!s_motion_en) { md_prev_valid = 0; md_cnt = 0; return; }
+
+    md_downsample(s_buf, md_cur);
+
+    if (md_prev_valid) {
+        int diff_cnt = 0;
+        int total = MD_W * MD_H;
+        for (int i = 0; i < total; i++) {
+            int d = md_cur[i] - md_prev[i];
+            if (d < 0) d = -d;
+            if (d > MD_DIFF_TH) diff_cnt++;
+        }
+        if (diff_cnt * 100 > total * s_motion_ratio)
+            md_cnt++;
+        else
+            md_cnt = 0;
+
+        if (md_cnt >= MD_DEBOUNCE) {
+            md_cnt = 0;
+            s_motion_hits++;   /* 命中一次（消费端清零；持续运动周期性再命中） */
+        }
+    }
+
+    memcpy(md_prev, md_cur, MD_W * MD_H);
+    md_prev_valid = 1;
+}
+
 static inline uint16_t pack_rgb565(int r, int g, int b)
 {
     if (r < 0) r = 0; else if (r > 255) r = 255;
@@ -228,6 +305,7 @@ static void *cam_thread(void *arg)
         if (now_ms - last_ms >= CAM_FPS_MS) {
             last_ms = now_ms;
             yuyv_scale_to_canvas(bufs[b.index].start);
+            motion_detect();   /* 帧差粗判（运动检测，命中计数供桥接层消费） */
             s_frame_ready = 1;
             s_fps_cnt++;
         }

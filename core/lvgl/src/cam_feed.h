@@ -51,6 +51,25 @@ int cam_feed_get_fps(void);
  */
 int cam_feed_copy_frame(uint8_t *dst);
 
+/* ---- 运动检测粗判引擎（入侵判别第一级，帧差法） ---- */
+
+/** 开关运动检测（默认开；关闭后不再产生命中） */
+void cam_feed_set_motion_en(int en);
+int  cam_feed_get_motion_en(void);
+
+/**
+ * 读取并清零运动命中标志
+ * @return 自上次读取以来的命中次数（降采样帧差连续 MOTION_DEBOUNCE 次超限）
+ */
+int cam_feed_get_motion_hits(void);
+
+/**
+ * 运动检测阈值（变化像素占比 %，1-50，默认 5）
+ * 占比超阈值的采样点灰度差 > 24 计为变化点
+ */
+void cam_feed_set_motion_threshold(int pct);
+int  cam_feed_get_motion_threshold(void);
+
 #ifdef __cplusplus
 }
 #endif
