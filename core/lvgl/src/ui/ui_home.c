@@ -18,6 +18,8 @@
 #include "../state_machine.h"
 #include "../dev_bridge.h"
 #include "../cam_feed.h"
+#include "../storage_mgr.h"
+#include "../mqtt_hub.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -316,6 +318,7 @@ static void _build_alarm_popup(void);
 static void _open_alarm_popup(int zone_idx, const char *src);
 static void _open_viewer(int idx);
 static void snapshot_capture(const char *zone, const char *level);
+static void _snapshots_restore(void);
 static void _refresh_test_modal(void);
 static void _screen_set_blank(int on);
 static void _cam_refresh_cb(lv_timer_t *timer);
@@ -902,6 +905,13 @@ static void _add_event(const char *title, const char *loc,
         char cnt_buf[8];
         snprintf(cnt_buf, sizeof(cnt_buf), "%d 条", evt_count);
         lv_label_set_text(g_event_count_lbl, cnt_buf);
+    }
+
+    /* 云端上报（MQTT fire-and-forget，不阻塞 UI；未配 broker 时模块内部禁用） */
+    {
+        char tbuf[8];
+        _get_time_str(tbuf, sizeof(tbuf));
+        mqtt_hub_publish_event(title, loc, level ? level : "", tbuf);
     }
 }
 
@@ -2316,100 +2326,13 @@ static void _on_event_view(lv_event_t *e)
 /* ================================================================
  * 相册弹窗（HTML #album-modal）：3×2 真实抓拍缩略图
  * 数据来自 g_snaps（抓拍按钮/预警触发经 snapshot_capture 写入）
+ * TF 持久化/容量/恢复由 storage_mgr 组件提供
  * ================================================================ */
 
-/* ================================================================
- * 抓拍持久化（TF 卡 BMP）：挂载点探测 + BMP 写入 + 容量查询
- * ================================================================ */
-static const char *tf_mnts[] = {
-    "/mnt/mmc", "/media/mmcblk1p1", "/media/mmcblk0p1",
-    "/mnt/sd", "/media/sdcard", "/mnt/tf", NULL,
-};
-
-/* 探测 TF 卡挂载点（返回第一个可写挂载点；无则 NULL） */
-static const char *_tf_mount(void)
-{
-    for (int i = 0; tf_mnts[i]; i++) {
-        if (access(tf_mnts[i], W_OK) == 0)
-            return tf_mnts[i];
-    }
-    return NULL;
-}
-
-/* TF 容量（MB）：total/avail 任一可为 NULL */
-static void _tf_capacity(int *total_mb, int *avail_mb)
-{
-    const char *mnt = _tf_mount();
-    if (!mnt) { *total_mb = -1; if (avail_mb) *avail_mb = -1; return; }
-    char path[128];
-    snprintf(path, sizeof(path), "%s/", mnt);
-    struct statvfs vfs;
-    if (statvfs(path, &vfs) != 0) { *total_mb = -1; return; }
-    if (total_mb)
-        *total_mb = (int)(vfs.f_blocks * (vfs.f_frsize >> 20));
-    if (avail_mb)
-        *avail_mb = (int)(vfs.f_bavail * (vfs.f_frsize >> 20));
-}
-
-/* RGB565 帧 → 24bit BMP 写入 TF（持久化存档；失败静默返回 -1） */
-static int _snapshot_save_bmp(const uint16_t *pix, int w, int h,
-                              const char *time_str)
-{
-    const char *mnt = _tf_mount();
-    if (!mnt) return -1;
-
-    int row_bytes = w * 3;
-    int pad = (4 - (row_bytes % 4)) % 4;
-    int stride = row_bytes + pad;
-    unsigned int data_size = stride * h;
-    unsigned int file_size = 54 + data_size;
-
-    char path[160];
-    snprintf(path, sizeof(path), "%s/snap_%s.bmp", mnt, time_str);
-    /* 时间含冒号（文件名非法字符）→ 换成 '-' */
-    for (char *p = path + strlen(mnt) + 6; *p; p++)
-        if (*p == ':') *p = '-';
-
-    FILE *fp = fopen(path, "wb");
-    if (!fp) {
-        perror("[SNAP] bmp open");
-        return -1;
-    }
-
-    unsigned char hdr[54] = {0};
-    hdr[0] = 'B'; hdr[1] = 'M';
-    memcpy(hdr + 2, &file_size, 4);
-    hdr[10] = 54;                                   /* 像素数据偏移 */
-    hdr[14] = 40;                                   /* DIB 头大小 */
-    memcpy(hdr + 18, &w, 4);
-    memcpy(hdr + 22, &h, 4);                        /* 正高 = 底行起 */
-    hdr[26] = 1;                                    /* planes */
-    hdr[28] = 24;                                   /* bpp */
-    memcpy(hdr + 34, &data_size, 4);
-    fwrite(hdr, 1, 54, fp);
-
-    unsigned char zero[4] = {0, 0, 0, 0};
-    for (int y = h - 1; y >= 0; y--) {              /* BMP 自底向上 */
-        const uint16_t *line = pix + y * w;
-        for (int x = 0; x < w; x++) {
-            unsigned char bgr[3];
-            uint16_t px = line[x];
-            bgr[0] = (px & 0x1F) << 3;              /* B */
-            bgr[1] = ((px >> 5) & 0x3F) << 2;       /* G */
-            bgr[2] = (px >> 11) << 3;               /* R */
-            fwrite(bgr, 1, 3, fp);
-        }
-        if (pad) fwrite(zero, 1, pad, fp);
-    }
-
-    fclose(fp);
-    printf("[SNAP] saved %s (%uKB)\n", path, file_size / 1024);
-    return 0;
-}
-
-/* 抓拍：拷当前摄像头帧 → 全图 + 缩略图降采样 + 元数据 → TF 持久化 → 相册重绘 */
+/* 抓拍：拷当前摄像头帧 → 全图 + 缩略图降采样 + 元数据 → TF 持久化 → 相册重绘
+ * zone_idx 用于 TF 文件名编码（重启恢复时还原区域名） */
 static void _rebuild_album_grid(void);
-static void snapshot_capture(const char *zone, const char *level)
+static void snapshot_capture_idx(int zone_idx, const char *zone, const char *level)
 {
     /* 1. 环形插入到槽位 0（最新在前），超出 SNAP_MAX 覆盖最旧 */
     if (g_snap_count < SNAP_MAX) g_snap_count++;
@@ -2434,11 +2357,29 @@ static void snapshot_capture(const char *zone, const char *level)
     _get_time_str(g_snaps[0].time, sizeof(g_snaps[0].time));
     snprintf(g_snaps[0].zone,  sizeof(g_snaps[0].zone),  "%s", zone ? zone : "手动");
     snprintf(g_snaps[0].level, sizeof(g_snaps[0].level), "%s", level ? level : "");
-    _snapshot_save_bmp(g_snaps[0].pix, SNAP_W, SNAP_H, g_snaps[0].time);
+    {
+        /* 级别串转 TF 文件名编码：high→hi medium→md low→lo */
+        const char *cmp_lv = "none";
+        if (strcmp(g_snaps[0].level, "high") == 0)   cmp_lv = "hi";
+        else if (strcmp(g_snaps[0].level, "medium") == 0) cmp_lv = "md";
+        else if (strcmp(g_snaps[0].level, "low") == 0)    cmp_lv = "lo";
+        storage_snap_save(g_snaps[0].pix, SNAP_W, SNAP_H,
+                          zone_idx, cmp_lv, g_snaps[0].time);
+    }
 
     /* 5. 相册打开则重绘 */
     if (g_album_body)
         _rebuild_album_grid();
+}
+
+static void snapshot_capture(const char *zone, const char *level)
+{
+    /* 手动/无索引抓拍：区域名反查分区索引（供 TF 文件名编码） */
+    int idx = 0;
+    for (int i = 0; i < ZONE_COUNT; i++) {
+        if (strcmp(zone_info[i].name, zone) == 0) { idx = i; break; }
+    }
+    snapshot_capture_idx(idx, zone, level);
 }
 
 /* 级别 → 颜色/文字（与事件徽章一致） */
@@ -2666,7 +2607,7 @@ static void _refresh_test_modal(void)
     /* 行 4: TF 卡容量（持久化存储） */
     {
         int total_mb = -1, avail_mb = -1;
-        _tf_capacity(&total_mb, &avail_mb);
+        storage_tf_capacity(&total_mb, &avail_mb);
         if (total_mb > 0)
             snprintf(buf, sizeof(buf), "TF:%d.%d/%dGB",
                      avail_mb / 1024, (avail_mb % 1024) * 10 / 1024, total_mb / 1024);
@@ -2783,8 +2724,64 @@ static void _build_album_modal(void)
     /* 内容超出屏幕时滚动，保证相册弹窗接近屏幕大小 */
     lv_obj_set_style_max_height(body, 480, 0);
 
-    /* 相册初始为空：抓拍按钮/预警触发后自动填充（真实画面） */
+    /* 相册初始为空：启动恢复函数（_snapshots_restore）从 TF 回填 */
     g_snap_count = 0;
+    _rebuild_album_grid();
+}
+
+/* ================================================================
+ * 启动恢复：扫描 TF 上 snap_*.bmp（mtime 最新 6 张）回填内存相册
+ * 文件名协议: snap_z<zone>_<cmp>_<HHMMSS>.bmp → 还原区域/级别/时间
+ * ================================================================ */
+static void _snapshots_restore(void)
+{
+    char paths[SNAP_MAX][160];
+    int n = storage_snap_list(paths, SNAP_MAX);
+    if (n <= 0) return;
+
+    for (int i = 0; i < n; i++) {
+        /* 读 BMP 像素（失败跳过该文件） */
+        if (storage_bmp_read(paths[i], g_snaps[i].pix, SNAP_W, SNAP_H) != 0)
+            continue;
+
+        /* 降采样缩略图 */
+        for (int ty = 0; ty < THUMB_H; ty++) {
+            int sy = ty * SNAP_H / THUMB_H;
+            const uint16_t *sline = g_snaps[i].pix + sy * SNAP_W;
+            uint16_t *dline = g_snaps[i].thumb + ty * THUMB_W;
+            for (int tx = 0; tx < THUMB_W; tx++)
+                dline[tx] = sline[tx * SNAP_W / THUMB_W];
+        }
+
+        /* 文件名解析元数据: snap_z<zone>_<cmp>_<HHMMSS>.bmp */
+        char *fname = strrchr(paths[i], '/');
+        fname = fname ? fname + 1 : paths[i];
+        int z = 0;
+        char cmp[8] = "none", hms[16] = "";
+        if (sscanf(fname, "snap_z%d_%7[^_]_%15s", &z, cmp, hms) != 3) {
+            z = 0;
+            snprintf(cmp, sizeof(cmp), "none");
+            snprintf(hms, sizeof(hms), "000000");
+        }
+
+        /* cmp → level */
+        const char *lv = "";
+        if (strcmp(cmp, "hi") == 0)      lv = "high";
+        else if (strcmp(cmp, "md") == 0) lv = "medium";
+        else if (strcmp(cmp, "lo") == 0) lv = "low";
+
+        snprintf(g_snaps[i].zone, sizeof(g_snaps[i].zone), "%s",
+                 (z >= 0 && z < ZONE_COUNT) ? zone_info[z].name : "手动");
+        snprintf(g_snaps[i].level, sizeof(g_snaps[i].level), "%s", lv);
+        if (strlen(hms) >= 4)
+            snprintf(g_snaps[i].time, sizeof(g_snaps[i].time),
+                     "%.2s:%.2s", hms, hms + 2);
+        else
+            snprintf(g_snaps[i].time, sizeof(g_snaps[i].time), "--:--");
+
+        g_snap_count = i + 1;
+    }
+
     _rebuild_album_grid();
 }
 
@@ -3052,6 +3049,9 @@ void ui_home_create(lv_obj_t *parent)
     _build_viewer_modal();
     _build_alarm_popup();
 
+    /* 6. 抓拍恢复：从 TF 回填上次开机的抓拍相册 */
+    _snapshots_restore();
+
     /* 触摸唤醒：任意触摸重置空闲计时并解除 blank */
     lv_obj_add_event_cb(parent, _on_screen_touch, LV_EVENT_PRESSED, NULL);
 
@@ -3107,7 +3107,7 @@ void ui_events_alarm_trigger_src(int id, const char *src)
     _update_zone_visual(id);
 
     /* 预警自动抓拍：截当前画面存入相册（区域=告警分区，级别=high） */
-    snapshot_capture(zone_info[id].name, "high");
+    snapshot_capture_idx(id, zone_info[id].name, "high");
 
     /* 触发类型写入事件标题："SENSOR 触发" / "CAM 触发"（未来摄像头预警复用） */
     char title[32];

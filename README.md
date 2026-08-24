@@ -59,7 +59,7 @@ make send         # 部署：.ko/.test/sump 产物 → NFS rootfs，.dtb → TFT
 - [x] P2 按键中断驱动（三种读模式，验收 5/5）
 - [x] P3 gpio_event 企业级驱动（多通道/kfifo/统计/tracepoint，验收 7/7 + 内核重编 ftrace）
 - [x] P4 PWM/I2C/SPI 子系统驱动（beep_pwm/ap3216c/icm20608，验收 8/8 + git d7b56ed）
-- [ ] P5 OV5640 V4L2 subdev 驱动（待摄像头到货）
+- [x] P5 OV5640 接入（2026-08-23 决策：采用内核自带 ov5640 驱动（mxc_v4l2 → /dev/video0）接入网关实时预览，自研 subdev 驱动不再必要；原"待摄像头到货"项关闭）
 - [x] P6-1 input 子系统按键驱动（/dev/input/eventX，验收 PASS=10 FAIL=0，2026-08-20）
 - [x] P6-2 SUMP 工具链开发完成（protocol/ 四件套 + 文档，2026-08-20；端到端板端验收 PASS=7 FAIL=0，2026-08-21）
 - [x] P6-3 SUMP 板端验收（自研 selftest 实证：1M 样本零丢失 + ch0 方波频率精确匹配，PASS=7 FAIL=0；PulseView GUI 实时连接经用户决定取消——libsigrok 官方预编译包未编译串口 TCP 传输，属第三方软件缺陷，源码编译可解锁）
