@@ -103,11 +103,12 @@ void dev_bridge_set_config(const struct dev_config *cfg);
 
 /* ---- 测试面板手动控制（与自动跟随逻辑共享缓存，互不打架） ---- */
 void dev_bridge_set_beep(int on);         /* 手动开关板载蜂鸣器 */
-void dev_bridge_set_pwm(int on, int freq);/* 手动开关 PWM 蜂鸣器并设频率 */
+void dev_bridge_set_pwm(int on, int freq); /* 手动开关 PWM 蜂鸣器并设频率 */
 void dev_bridge_set_als_en(int en);       /* AP3216C 采集使能 */
 void dev_bridge_set_imu_en(int en);       /* ICM20608 采集使能 */
 int  dev_bridge_get_als_en(void);
 int  dev_bridge_get_imu_en(void);
+void dev_bridge_set_beep_mute(int mute);  /* 告警静音挂起（消警自动解除） */
 
 #ifdef __cplusplus
 }

@@ -162,6 +162,8 @@ static int g_beep_on = -1;   /* 上次蜂鸣器状态（-1=未知） */
 static int g_pwm_on_cur = 0; /* 当前 PWM 开关状态（测试面板可调） */
 static int g_pwm_freq_cur = PWM_DEFAULT_FREQ;  /* 当前 PWM 频率（测试面板可调） */
 static time_t g_zone_last_trigger[4] = {0};    /* 各位置上次触发时间（冷却用） */
+static int g_beep_muted = 0;  /* 静音挂起（告警弹窗静音按钮；消警自动解除） */
+static int g_snd_phase = 0;   /* 分级声光节奏相位（200ms/拍） */
 
 /* ================================================================
  * KEY0 设备探测：遍历 /dev/input/eventX，按名字匹配 gpio-keys
@@ -401,15 +403,17 @@ static void bridge_timer_cb(lv_timer_t *t)
         ui_events_alarm_trigger_src(i, "SENSOR");
     }
 
-    /* --- 告警指示：LED 闪烁 + 蜂鸣器鸣叫；无告警时 LED 跟随布防 --- */
-    int alarm = ui_events_zone_has_alarm();
+    /* --- 告警分级声光（设计 2.2：高=快闪+长鸣 中=中闪+断鸣 低=慢闪+短鸣） ---
+     * 级别：3=高（窗/周界）2=中（仓库）1=低（门）0=无告警
+     * 节拍 200ms：高=LED 每拍翻+持续鸣；中=LED 2 拍翻+2 拍鸣/2 拍停；低=LED 4 拍翻+1 拍鸣/3 拍停 */
+    int alarm_lvl = ui_events_zone_alarm_level();
 
     if (g_led_fd >= 0) {
-        if (alarm) {
-            /* 告警：LED 闪烁（200ms 相位翻转） */
+        if (alarm_lvl > 0) {
             static int blink = 0;
             blink++;
-            int led = (blink / 2) % 2;   /* 400ms 周期 */
+            int period = (alarm_lvl >= 3) ? 1 : (alarm_lvl == 2 ? 2 : 4);
+            int led = (blink / 2) % period ? 0 : 1;   /* 按级别周期翻转 */
             if (led != g_led_on) {
                 ioctl(g_led_fd, led ? LED_IOC_ON : LED_IOC_OFF);
                 g_led_on = led;
@@ -424,15 +428,32 @@ static void bridge_timer_cb(lv_timer_t *t)
         }
     }
 
-    /* --- 蜂鸣器跟随告警状态（gpio-leds sysfs：写 '1' 响 / '0' 停，变化才写） --- */
+    /* --- 蜂鸣器：分级鸣叫节奏（静音挂起时只停不响，消警自动解除静音） --- */
     if (g_beep_fd >= 0) {
-        if (alarm != g_beep_on) {
+        if (g_beep_muted && alarm_lvl == 0)
+            g_beep_muted = 0;   /* 告警解除，自动恢复跟随 */
+
+        if (!g_beep_muted && alarm_lvl > 0) {
+            g_snd_phase++;
+            int beep = 1;                                        /* 高：持续长鸣 */
+            if (alarm_lvl == 2) beep = (g_snd_phase / 2) % 2;    /* 中：400ms 鸣/停 */
+            if (alarm_lvl == 1) beep = (g_snd_phase % 4) == 0;   /* 低：200ms 短鸣/600ms 停 */
+
+            if (beep != g_beep_on) {
+                if (lseek(g_beep_fd, 0, SEEK_SET) >= 0) {
+                    char c = beep ? '1' : '0';
+                    if (write(g_beep_fd, &c, 1) < 0)
+                        perror("[BRIDGE] beep write");
+                }
+                g_beep_on = beep;
+            }
+        } else if (g_beep_on != 0) {
             if (lseek(g_beep_fd, 0, SEEK_SET) >= 0) {
-                char c = alarm ? '1' : '0';
+                char c = '0';
                 if (write(g_beep_fd, &c, 1) < 0)
                     perror("[BRIDGE] beep write");
             }
-            g_beep_on = alarm;
+            g_beep_on = 0;
         }
     }
 }
@@ -564,6 +585,20 @@ void dev_bridge_set_pwm(int on, int freq)
     }
     g_pwm_on_cur = on ? 1 : 0;   /* 记录开关状态（诊断显示） */
     g_pwm_freq_cur = freq;       /* 记录当前频率（诊断显示） */
+}
+
+void dev_bridge_set_beep_mute(int mute)
+{
+    g_beep_muted = mute ? 1 : 0;
+    if (g_beep_muted && g_beep_fd >= 0 && g_beep_on != 0) {
+        /* 立即静音 */
+        if (lseek(g_beep_fd, 0, SEEK_SET) >= 0) {
+            char c = '0';
+            if (write(g_beep_fd, &c, 1) < 0)
+                perror("[BRIDGE] beep mute write");
+        }
+        g_beep_on = 0;
+    }
 }
 
 void dev_bridge_set_als_en(int en)

@@ -101,6 +101,13 @@ int ui_events_zone_is_armed(int id);
 int ui_events_zone_has_alarm(void);
 
 /**
+ * 查询当前告警的最高级别（分级声光策略用）
+ * @return 0=无告警 1=低（门）2=中（仓库）3=高（窗/周界）
+ * 映射按设计文档 2.2：门=低、仓库=中、窗/周界=高；多分区同时告警取最高
+ */
+int ui_events_zone_alarm_level(void);
+
+/**
  * 用户活动通知（触摸/按键唤醒统一入口）
  * 重置屏幕空闲计时并解除 blank（屏幕休眠期间按 KEY0/触摸即唤醒）
  */

@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/statvfs.h>
 
 /* ---- 中文字库声明 ---- */
 LV_FONT_DECLARE(lv_font_SHSC_16);
@@ -193,6 +194,13 @@ static lv_obj_t *g_test_lbls[8];            /* 各模块状态行 label（1s 刷
 static int       g_idle_sec = 0;            /* 无触摸空闲秒数（超时休眠） */
 #define IDLE_SLEEP_SEC  600                 /* 10 分钟无操作 → 屏幕熄灭 */
 
+/* 告警确认弹窗（长按 1s 消警防误触 + 一键静音） */
+static lv_obj_t *g_alarm_popup       = NULL;  /* 告警弹窗遮罩 */
+static lv_obj_t *g_alarm_info_lbl    = NULL;  /* 告警信息行（区域/类型/时间） */
+static lv_obj_t *g_confirm_bar       = NULL;  /* 长按进度条 */
+static uint32_t  g_confirm_tick      = 0;     /* 长按起始 tick（0=未按） */
+static int       g_alarm_zone        = -1;    /* 告警分区索引 */
+
 /* 摄像头画布（630×340 铺满画面区，静态缓冲 ≈428KB 不占 LVGL 堆；cam_feed 线程直写） */
 static uint8_t g_cam_canvas_buf[CAM_DISP_W * CAM_DISP_H * 2];
 static lv_obj_t *g_cam_canvas = NULL;       /* canvas 对象 */
@@ -304,6 +312,8 @@ static void _build_settings_modal(void);
 static void _build_album_modal(void);
 static void _build_test_modal(void);
 static void _build_viewer_modal(void);
+static void _build_alarm_popup(void);
+static void _open_alarm_popup(int zone_idx, const char *src);
 static void _open_viewer(int idx);
 static void snapshot_capture(const char *zone, const char *level);
 static void _refresh_test_modal(void);
@@ -976,6 +986,7 @@ static int _any_modal_visible(void)
     if (g_overlay_settings && !lv_obj_has_flag(g_overlay_settings, LV_OBJ_FLAG_HIDDEN)) return 1;
     if (g_album_overlay    && !lv_obj_has_flag(g_album_overlay, LV_OBJ_FLAG_HIDDEN)) return 1;
     if (g_test_overlay     && !lv_obj_has_flag(g_test_overlay, LV_OBJ_FLAG_HIDDEN)) return 1;
+    if (g_alarm_popup      && !lv_obj_has_flag(g_alarm_popup, LV_OBJ_FLAG_HIDDEN)) return 1;
     return 0;
 }
 
@@ -2307,7 +2318,96 @@ static void _on_event_view(lv_event_t *e)
  * 数据来自 g_snaps（抓拍按钮/预警触发经 snapshot_capture 写入）
  * ================================================================ */
 
-/* 抓拍：拷当前摄像头帧 → 全图 + 缩略图降采样 + 元数据 → 相册重绘 */
+/* ================================================================
+ * 抓拍持久化（TF 卡 BMP）：挂载点探测 + BMP 写入 + 容量查询
+ * ================================================================ */
+static const char *tf_mnts[] = {
+    "/mnt/mmc", "/media/mmcblk1p1", "/media/mmcblk0p1",
+    "/mnt/sd", "/media/sdcard", "/mnt/tf", NULL,
+};
+
+/* 探测 TF 卡挂载点（返回第一个可写挂载点；无则 NULL） */
+static const char *_tf_mount(void)
+{
+    for (int i = 0; tf_mnts[i]; i++) {
+        if (access(tf_mnts[i], W_OK) == 0)
+            return tf_mnts[i];
+    }
+    return NULL;
+}
+
+/* TF 容量（MB）：total/avail 任一可为 NULL */
+static void _tf_capacity(int *total_mb, int *avail_mb)
+{
+    const char *mnt = _tf_mount();
+    if (!mnt) { *total_mb = -1; if (avail_mb) *avail_mb = -1; return; }
+    char path[128];
+    snprintf(path, sizeof(path), "%s/", mnt);
+    struct statvfs vfs;
+    if (statvfs(path, &vfs) != 0) { *total_mb = -1; return; }
+    if (total_mb)
+        *total_mb = (int)(vfs.f_blocks * (vfs.f_frsize >> 20));
+    if (avail_mb)
+        *avail_mb = (int)(vfs.f_bavail * (vfs.f_frsize >> 20));
+}
+
+/* RGB565 帧 → 24bit BMP 写入 TF（持久化存档；失败静默返回 -1） */
+static int _snapshot_save_bmp(const uint16_t *pix, int w, int h,
+                              const char *time_str)
+{
+    const char *mnt = _tf_mount();
+    if (!mnt) return -1;
+
+    int row_bytes = w * 3;
+    int pad = (4 - (row_bytes % 4)) % 4;
+    int stride = row_bytes + pad;
+    unsigned int data_size = stride * h;
+    unsigned int file_size = 54 + data_size;
+
+    char path[160];
+    snprintf(path, sizeof(path), "%s/snap_%s.bmp", mnt, time_str);
+    /* 时间含冒号（文件名非法字符）→ 换成 '-' */
+    for (char *p = path + strlen(mnt) + 6; *p; p++)
+        if (*p == ':') *p = '-';
+
+    FILE *fp = fopen(path, "wb");
+    if (!fp) {
+        perror("[SNAP] bmp open");
+        return -1;
+    }
+
+    unsigned char hdr[54] = {0};
+    hdr[0] = 'B'; hdr[1] = 'M';
+    memcpy(hdr + 2, &file_size, 4);
+    hdr[10] = 54;                                   /* 像素数据偏移 */
+    hdr[14] = 40;                                   /* DIB 头大小 */
+    memcpy(hdr + 18, &w, 4);
+    memcpy(hdr + 22, &h, 4);                        /* 正高 = 底行起 */
+    hdr[26] = 1;                                    /* planes */
+    hdr[28] = 24;                                   /* bpp */
+    memcpy(hdr + 34, &data_size, 4);
+    fwrite(hdr, 1, 54, fp);
+
+    unsigned char zero[4] = {0, 0, 0, 0};
+    for (int y = h - 1; y >= 0; y--) {              /* BMP 自底向上 */
+        const uint16_t *line = pix + y * w;
+        for (int x = 0; x < w; x++) {
+            unsigned char bgr[3];
+            uint16_t px = line[x];
+            bgr[0] = (px & 0x1F) << 3;              /* B */
+            bgr[1] = ((px >> 5) & 0x3F) << 2;       /* G */
+            bgr[2] = (px >> 11) << 3;               /* R */
+            fwrite(bgr, 1, 3, fp);
+        }
+        if (pad) fwrite(zero, 1, pad, fp);
+    }
+
+    fclose(fp);
+    printf("[SNAP] saved %s (%uKB)\n", path, file_size / 1024);
+    return 0;
+}
+
+/* 抓拍：拷当前摄像头帧 → 全图 + 缩略图降采样 + 元数据 → TF 持久化 → 相册重绘 */
 static void _rebuild_album_grid(void);
 static void snapshot_capture(const char *zone, const char *level)
 {
@@ -2330,10 +2430,11 @@ static void snapshot_capture(const char *zone, const char *level)
         }
     }
 
-    /* 4. 元数据 */
+    /* 4. 元数据 + TF 持久化（BMP 存档；无 TF 卡跳过） */
     _get_time_str(g_snaps[0].time, sizeof(g_snaps[0].time));
     snprintf(g_snaps[0].zone,  sizeof(g_snaps[0].zone),  "%s", zone ? zone : "手动");
     snprintf(g_snaps[0].level, sizeof(g_snaps[0].level), "%s", level ? level : "");
+    _snapshot_save_bmp(g_snaps[0].pix, SNAP_W, SNAP_H, g_snaps[0].time);
 
     /* 5. 相册打开则重绘 */
     if (g_album_body)
@@ -2561,6 +2662,18 @@ static void _refresh_test_modal(void)
         snprintf(buf, sizeof(buf), "AP3216C ERR");
     }
     if (g_test_lbls[3]) lv_label_set_text(g_test_lbls[3], buf);
+
+    /* 行 4: TF 卡容量（持久化存储） */
+    {
+        int total_mb = -1, avail_mb = -1;
+        _tf_capacity(&total_mb, &avail_mb);
+        if (total_mb > 0)
+            snprintf(buf, sizeof(buf), "TF:%d.%d/%dGB",
+                     avail_mb / 1024, (avail_mb % 1024) * 10 / 1024, total_mb / 1024);
+        else
+            snprintf(buf, sizeof(buf), "TF:ERR");
+        if (g_test_lbls[4]) lv_label_set_text(g_test_lbls[4], buf);
+    }
 }
 
 static void _build_test_modal(void)
@@ -2628,10 +2741,10 @@ static void _build_test_modal(void)
         }
     }
 
-    /* ---- 数据区：4 行模块状态（刷新函数按行序更新） ---- */
-    const char *init[4] = { "LED:-- KEY:--", "BEEP:-- PWM:--",
-                            "ICM --", "AP3216C --" };
-    for (int r = 0; r < 4; r++) {
+    /* ---- 数据区：5 行模块状态（刷新函数按行序更新） ---- */
+    const char *init[5] = { "LED:-- KEY:--", "BEEP:-- PWM:--",
+                            "ICM --", "AP3216C --", "TF:--" };
+    for (int r = 0; r < 5; r++) {
         lv_obj_t *row = uiw_obj(body);
         if (!row) continue;
         lv_obj_set_size(row, 528, LV_SIZE_CONTENT);
@@ -2725,6 +2838,139 @@ static void _build_viewer_modal(void)
 }
 
 /* ================================================================
+ * 告警确认弹窗（设计 2.2 P0：长按 1s 消警防误触 + 一键静音）
+ * 预警触发时弹出，显示 区域/类型/级别/时间；
+ * "1s 消警"按钮需按住 1 秒（进度条指示）确认；MUTE 仅静音不清告警。
+ * ================================================================ */
+
+/* 长按进度（LV_EVENT_PRESSING 持续触发；松开复位） */
+static void _on_confirm_pressing(lv_event_t *e)
+{
+    (void)e;
+    if (g_confirm_tick == 0) g_confirm_tick = lv_tick_get();
+    uint32_t held = lv_tick_elaps(g_confirm_tick);
+
+    if (g_confirm_bar)
+        lv_bar_set_value(g_confirm_bar, held >= 1000 ? 100 : held / 10, LV_ANIM_OFF);
+
+    if (held >= 1000) {
+        g_confirm_tick = 0;
+        if (g_confirm_bar) lv_bar_set_value(g_confirm_bar, 100, LV_ANIM_OFF);
+        /* 确认消警：消除所有告警分区（回布防中）+ 关弹窗 */
+        for (int i = 0; i < ZONE_COUNT; i++) {
+            if (g_zone_states[i] == ZONE_ALARM) {
+                g_zone_states[i] = ZONE_ARMED;
+                _update_zone_visual(i);
+            }
+        }
+        _add_event("告警确认", "系统", CLR_GREEN, "");
+        _show_toast("告警已确认");
+        if (g_alarm_popup)
+            lv_obj_add_flag(g_alarm_popup, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void _on_confirm_released(lv_event_t *e)
+{
+    (void)e;
+    g_confirm_tick = 0;   /* 未满 1s 松开：复位进度 */
+    if (g_confirm_bar)
+        lv_bar_set_value(g_confirm_bar, 0, LV_ANIM_OFF);
+}
+
+/* 一键静音：蜂鸣器停（告警状态保留，消警后自动恢复跟随） */
+static void _on_alarm_mute(lv_event_t *e)
+{
+    (void)e;
+    dev_bridge_set_beep_mute(1);
+    _add_event("告警静音", "系统", CLR_AMBER, "");
+}
+
+/* 预警触发时弹出告警确认弹窗（供 ui_events_alarm_trigger_src 调用） */
+static void _open_alarm_popup(int zone_idx, const char *src)
+{
+    if (!g_alarm_popup) return;
+    g_alarm_zone = zone_idx;
+
+    if (g_alarm_info_lbl) {
+        char b[64];
+        snprintf(b, sizeof(b), "%s · %s 触发 · %s",
+                 zone_info[zone_idx].name,
+                 (src && src[0]) ? src : "SENSOR",
+                 g_snaps[0].time);
+        lv_label_set_text(g_alarm_info_lbl, b);
+    }
+    if (g_confirm_bar) lv_bar_set_value(g_confirm_bar, 0, LV_ANIM_OFF);
+    g_confirm_tick = 0;
+
+    lv_obj_clear_flag(g_alarm_popup, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void _build_alarm_popup(void)
+{
+    g_alarm_popup = uiw_modal_create(lv_screen_active(), "告警", 440);
+    if (!g_alarm_popup) return;
+
+    lv_obj_t *box = lv_obj_get_child(g_alarm_popup, 0);
+    if (!box) return;
+    lv_obj_t *body = lv_obj_get_child(box, 1);
+    if (!body) return;
+
+    /* 告警信息行 */
+    g_alarm_info_lbl = uiw_label_font(body, "--", CLR_RED, &lv_font_SHSC_16);
+    if (g_alarm_info_lbl) {
+        lv_obj_set_width(g_alarm_info_lbl, 368);
+        lv_label_set_long_mode(g_alarm_info_lbl, LV_LABEL_LONG_DOT);
+    }
+
+    /* 长按消警按钮（带进度条指示按住时长） */
+    lv_obj_t *btn = lv_button_create(body);
+    if (btn) {
+        lv_obj_set_size(btn, 368, 52);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(CLR_RED), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_30, 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(CLR_RED), 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *bl = uiw_label(btn, "1s 消警（按住）", CLR_RED);
+        if (bl) lv_obj_center(bl);
+
+        lv_obj_add_event_cb(btn, _on_confirm_pressing, LV_EVENT_PRESSING, NULL);
+        lv_obj_add_event_cb(btn, _on_confirm_released, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(btn, _on_confirm_released, LV_EVENT_PRESS_LOST, NULL);
+    }
+
+    /* 长按进度条 */
+    g_confirm_bar = lv_bar_create(body);
+    if (g_confirm_bar) {
+        lv_obj_set_size(g_confirm_bar, 368, 8);
+        lv_bar_set_range(g_confirm_bar, 0, 100);
+        lv_bar_set_value(g_confirm_bar, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(g_confirm_bar, lv_color_hex(CLR_BORDER), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(g_confirm_bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(g_confirm_bar, lv_color_hex(CLR_RED), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(g_confirm_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    }
+
+    /* 一键静音 */
+    lv_obj_t *mute = lv_button_create(body);
+    if (mute) {
+        lv_obj_set_size(mute, 368, 40);
+        lv_obj_set_style_bg_color(mute, lv_color_hex(CLR_AMBER), 0);
+        lv_obj_set_style_bg_opa(mute, LV_OPA_20, 0);
+        lv_obj_set_style_border_color(mute, lv_color_hex(CLR_AMBER), 0);
+        lv_obj_set_style_border_width(mute, 1, 0);
+        lv_obj_set_style_radius(mute, 0, 0);
+        lv_obj_clear_flag(mute, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *ml = uiw_label(mute, "MUTE", CLR_AMBER);
+        if (ml) lv_obj_center(ml);
+        lv_obj_add_event_cb(mute, _on_alarm_mute, LV_EVENT_CLICKED, NULL);
+    }
+}
+
+/* ================================================================
  * ui_home_create — 主入口
  * ================================================================ */
 void ui_home_create(lv_obj_t *parent)
@@ -2804,6 +3050,7 @@ void ui_home_create(lv_obj_t *parent)
     _build_album_modal();
     _build_test_modal();
     _build_viewer_modal();
+    _build_alarm_popup();
 
     /* 触摸唤醒：任意触摸重置空闲计时并解除 blank */
     lv_obj_add_event_cb(parent, _on_screen_touch, LV_EVENT_PRESSED, NULL);
@@ -2867,6 +3114,9 @@ void ui_events_alarm_trigger_src(int id, const char *src)
     snprintf(title, sizeof(title), "%s 触发", (src && src[0]) ? src : "SENSOR");
     _add_event(title, zone_info[id].name, CLR_RED, "high");
     _show_toast("异常 已触发");
+
+    /* 告警确认弹窗（设计 P0：长按 1s 消警防误触 + MUTE 静音） */
+    _open_alarm_popup(id, src);
 }
 
 void ui_events_alarm_trigger(int id)
@@ -2956,6 +3206,17 @@ int ui_events_zone_has_alarm(void)
     for (int i = 0; i < ZONE_COUNT; i++)
         if (g_zone_states[i] == ZONE_ALARM) return 1;
     return 0;
+}
+
+int ui_events_zone_alarm_level(void)
+{
+    /* 分区→级别映射（设计文档 2.2 告警分级）：门=低(1) 仓库=中(2) 窗/周界=高(3) */
+    static const int zone_lvl[ZONE_COUNT] = { 1, 1, 3, 2 };
+    int max_lvl = 0;
+    for (int i = 0; i < ZONE_COUNT; i++)
+        if (g_zone_states[i] == ZONE_ALARM && zone_lvl[i] > max_lvl)
+            max_lvl = zone_lvl[i];
+    return max_lvl;
 }
 
 void ui_events_user_activity(void)
