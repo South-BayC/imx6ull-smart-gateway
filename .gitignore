@@ -23,6 +23,21 @@ core/*/test/*_test
 .omo/
 .understand-anything/
 
+# ===== LVGL 库非必要目录（仅保留 src/ 与顶层头文件供编译） =====
+core/lvgl/lvgl/demos/
+core/lvgl/lvgl/docs/
+core/lvgl/lvgl/examples/
+core/lvgl/lvgl/tests/
+core/lvgl/lvgl/env_support/
+core/lvgl/lvgl/scripts/
+core/lvgl/lvgl/*.md
+core/lvgl/lvgl/LVGL.png
+core/lvgl/lvgl/LICENSING.txt
+core/lvgl/lvgl/CMakeLists.txt
+core/lvgl/lvgl/idf_component.yml
+core/lvgl/lvgl/library.json
+core/lvgl/lvgl/library.properties
+
 # ===== Python =====
 __pycache__/
 *.pyc

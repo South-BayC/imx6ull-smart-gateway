@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0
+# LVGL v9.2.2 安防网关 — 交叉编译主 Makefile
+# 产物: $(BUILD_DIR)/lvgl/lvgl_gateway
+
+CROSS_COMPILE ?= arm-linux-gnueabihf-
+CC  := $(CROSS_COMPILE)gcc
+LVGL_DIR := $(CURDIR)/lvgl
+BUILD_LVGL_DIR := $(BUILD_DIR)/lvgl
+TARGET := $(BUILD_LVGL_DIR)/lvgl_gateway
+
+# 板端：排除桌面驱动（SDL/Wayland/X11/Windows/GLFW），避免 SDL2 依赖
+LVGL_SRCS_ALL := $(shell find $(LVGL_DIR)/src -name "*.c" 2>/dev/null | sed "s|^$(CURDIR)/||")
+LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name "*.c" -not -path "*/drivers/sdl/*" -not -path "*/drivers/wayland/*" -not -path "*/drivers/x11/*" -not -path "*/drivers/windows/*" -not -path "*/drivers/glfw/*" 2>/dev/null | sed "s|^$(CURDIR)/||")
+APP_SRCS  := $(shell find src -name "*.c" -not -name "sim_main.c" 2>/dev/null | sed "s|^$(CURDIR)/||")
+APP_SRCS  := $(filter-out %test_%.c,$(APP_SRCS))
+SRCS      := $(LVGL_SRCS) $(APP_SRCS)
+
+OBJS := $(patsubst %.c,$(BUILD_LVGL_DIR)/%.o,$(SRCS))
+
+CFLAGS  := -std=gnu99 -I$(CURDIR) -I$(LVGL_DIR) -I$(LVGL_DIR)/src -O2 -Wall -Wextra -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE
+LDFLAGS := -lm -lpthread
+
+all: $(TARGET)
+	@echo "LVGL gateway built: $(TARGET)  ($$(du -h $(TARGET) 2>/dev/null | cut -f1))"
+
+$(TARGET): $(OBJS)
+	@mkdir -p $(dir $@)
+	$(CC) $^ -o $@ $(LDFLAGS)
+	@arm-linux-gnueabihf-strip $@ 2>/dev/null || true
+
+# lv_conf.h 变化时自动触发全量重编（作为所有 .o 的依赖）
+$(BUILD_LVGL_DIR)/%.o: %.c $(CURDIR)/lv_conf.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# 模拟器（SDL，宿主机）
+SIM_TARGET := $(BUILD_LVGL_DIR)/lvgl_sim
+SIM_SRCS   := $(filter-out src/main.c,$(APP_SRCS)) src/sim_main.c $(LVGL_SRCS_ALL)
+SIM_OBJS   := $(patsubst %.c,$(BUILD_LVGL_DIR)/sim/%.o,$(SIM_SRCS))
+SIM_CFLAGS := -std=gnu99 -g -O0 -I$(CURDIR) -I$(LVGL_DIR) -I$(LVGL_DIR)/src -Wall -Wextra -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -DLV_USE_SDL=1
+
+sim: $(SIM_TARGET)
+	@echo "LVGL sim built: $(SIM_TARGET)"
+
+$(SIM_TARGET): $(SIM_OBJS)
+	@mkdir -p $(dir $@)
+	gcc $^ -o $@ -lSDL2 -lm -lpthread
+
+$(BUILD_LVGL_DIR)/sim/%.o: %.c $(CURDIR)/lv_conf.h
+	@mkdir -p $(dir $@)
+	gcc $(SIM_CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD_LVGL_DIR)
+
+# LVGL 无独立板端测试程序（交互验证用模拟器: make sim）
+test:
+	@echo "LVGL: no standalone test, run 'make sim' on host for UI verification"
+
+.PHONY: all clean sim test

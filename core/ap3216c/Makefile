@@ -7,10 +7,9 @@ all:
 	mkdir -p $(BUILD_DIR)/module
 	cp ap3216c.ko $(BUILD_DIR)/module/
 
-# 应用层测试程序 → build/test/
+# P7-4 迁移 IIO 后旧 /dev 接口测试程序已删除（用户态走 IIO sysfs）
 test:
-	mkdir -p $(BUILD_DIR)/test
-	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/ap3216c_test test/ap3216c_test.c -I uapi
+	@echo "ap3216c: IIO driver, no standalone test (use /sys/bus/iio/devices/)"
 
 clean:
 	make -C $(KDIR) M=$(CURDIR) ARCH=arm clean

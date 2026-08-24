@@ -56,6 +56,21 @@
 		status = "okay";
 	};
 
+	/* P7-3：板载蜂鸣器（出厂 dts 同款 gpio-leds 子系统）
+	 * 用户态接口 /sys/class/leds/beep/brightness：写 1 响 / 0 停
+	 * （GPIO_ACTIVE_LOW 极性由内核处理），供告警响铃使用 */
+	leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_beep>;
+
+		beep {
+			label = "beep";
+			gpios = <&gpio5 1 GPIO_ACTIVE_LOW>;
+			default-state = "off";
+		};
+	};
+
 	pxp_v4l2 {
 		compatible = "fsl,imx6ul-pxp-v4l2", "fsl,imx6sx-pxp-v4l2", "fsl,imx6sl-pxp-v4l2";
 		status = "okay";
@@ -167,39 +182,34 @@
 		status = "disabled";   /* P3: 与 gpio_event_capture 共用 GPIO1_IO18，禁用避免冲突 */
 	};
 
-/* ======== P6 input 子系统按键驱动（手册 5.15.1）========
-	   与 gpio-event-capture / key-event 共用 GPIO1_IO18（KEY0），
-	   三者互斥：运行时只能加载其一（GPIO 已被占用时 probe 失败）。
-	   验证 input 时：dts 将本节点改 okay + gpio-event-capture 改 disabled，
-	   重编 dtb 后加载 key_input.ko；或运行时先 rmmod gpio_event_capture。
-	   key_code=227(KEY_ARMED)，可用 evtest / key_input_test 读取事件流 */
+/* ======== P6/P7-3 input 子系统按键驱动（手册 5.15.1）========
+	   P7-3 起作为 KEY0 唯一占用者（gpio-event-capture 已释放该引脚）：
+	   按下 KEY0 → code=227(KEY_ARMED)，安防网关用于布防/撤防切换。
+	   key-event 与本节点功能重合，保持 disabled。 */
 	key-input {
 		compatible = "alientek,key-input";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_key>;
 		key-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>;   /* KEY0 */
 		linux,code = <227>;                        /* KEY_ARMED */
-		status = "disabled";   /* P6-2: 与 gpio-event-capture 互斥，板验 8 通道时禁用 */
+		status = "okay";
 	};
 
-	/* ======== P3/P6-2 gpio_event 多通道事件采集 ========
-	   通道 0 = KEY0（GPIO1_IO18），复用 pinctrl_key；
-	   通道 1 = GPIO1_IO01（JP6 pin17 "GPIO_01"），复用 pinctrl_capture1；
-	   通道 2 = GPIO1_IO00（JP6 GPIO_00），复用 pinctrl_capture0；
-	   通道 3 = GPIO1_IO02（JP6 GPIO_02），复用 pinctrl_capture2；
-	   ★按需采集原则：仅配置无冲突通道（IO18/IO01/IO00/IO02），
-	   触摸屏(gt9147)/LED/PWM 等外设功能全部保留（其引脚不再用作采集通道）。
-	   PulseView 仍显示 8 通道，未配置通道（4-7）为恒低平线。
-	   与 key-input / key-event 互斥：共用 GPIO1_IO18，dts 仅允许其一为 okay。 */
+	/* ======== P3/P6-2/P7-3 gpio_event 多通道事件采集 ========
+	   ★P7-3 起释放 KEY0（GPIO1_IO18）给 key-input 做布防按键，
+	   仅保留 JP6 扩展口 3 个通道（可外接门磁/红外等开关量传感器）：
+	   通道 0 = GPIO1_IO01（JP6 pin17 "GPIO_01"），复用 pinctrl_capture1；
+	   通道 1 = GPIO1_IO00（JP6 GPIO_00），复用 pinctrl_capture0；
+	   通道 2 = GPIO1_IO02（JP6 GPIO_02），复用 pinctrl_capture2；
+	   与 key-input / key-event 互斥关系解除：不再占用 GPIO1_IO18。 */
 	gpio-event-capture {
 		compatible = "alientek,gpio-event-capture";
 		pinctrl-names = "default";
-		pinctrl-0 = <&pinctrl_key &pinctrl_capture1
+		pinctrl-0 = <&pinctrl_capture1
 			     &pinctrl_capture0 &pinctrl_capture2>;
-		capture-gpios = <&gpio1 18 GPIO_ACTIVE_LOW>,   /* 通道0：KEY0 */
-				<&gpio1  1 GPIO_ACTIVE_LOW>,  /* 通道1：GPIO1_IO01 (JP6 pin17) */
-				<&gpio1  0 GPIO_ACTIVE_LOW>,  /* 通道2：GPIO1_IO00 (JP6 GPIO_00) */
-				<&gpio1  2 GPIO_ACTIVE_LOW>;  /* 通道3：GPIO1_IO02 (JP6 GPIO_02) */
+		capture-gpios = <&gpio1  1 GPIO_ACTIVE_LOW>,  /* 通道0：GPIO1_IO01 (JP6 pin17) */
+				<&gpio1  0 GPIO_ACTIVE_LOW>,  /* 通道1：GPIO1_IO00 (JP6 GPIO_00) */
+				<&gpio1  2 GPIO_ACTIVE_LOW>;  /* 通道2：GPIO1_IO02 (JP6 GPIO_02) */
 		fifo-depth-events = <1024>;                    /* 2 的幂校验 */
 		status = "okay";
 	};
@@ -483,6 +493,14 @@
 		pinctrl_pwm3: pwm3grp {
 			fsl,pins = <
 				MX6UL_PAD_GPIO1_IO04__PWM3_OUT   0x110b0
+			>;
+		};
+
+		/* P7-3：板载有源蜂鸣器（出厂 dts 同款，gpio-leds 子系统）
+		 * SNVS_TAMPER1 = GPIO5_IO01，与 beep_pwm（GPIO1_IO04 外接无源）互不冲突 */
+		pinctrl_beep: beepgrp {
+			fsl,pins = <
+				MX6ULL_PAD_SNVS_TAMPER1__GPIO5_IO01	0x17059
 			>;
 		};
 

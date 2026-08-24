@@ -69,7 +69,8 @@ struct gt9147_dev {
 	void *private_data;						/* 私有数据 		*/
 	struct input_dev *input;				/* input结构体 		*/
 	struct i2c_client *client;				/* I2C客户端 		*/
-
+	int irq_fail_cnt;						/* 中断读取失败连续计数（防风暴） */
+	int irq_no_data_cnt;					/* 中断无数据连续计数（防风暴） */
 };
 struct gt9147_dev gt9147;
 
@@ -116,6 +117,23 @@ static int gt9147_ts_reset(struct i2c_client *client, struct gt9147_dev *dev)
     msleep(50);
     gpio_direction_input(dev->irq_pin); /* INT引脚设置为输入 */
 
+	return 0;
+}
+
+/*
+ * @description	: 软复位GT9147（中断异常/风暴时调用，自愈恢复）
+ * 通过控制寄存器软复位，无需 GPIO 复位，避免重配 pinctrl
+ */
+static s32 gt9147_write_regs(struct gt9147_dev *dev, u16 reg, u8 *buf, u8 len); /* 前向声明 */
+
+static int gt9147_ts_soft_reset(struct gt9147_dev *dev)
+{
+	u8 data = 0x02;		/* 0x8040 写 0x02 = 软复位 */
+	gt9147_write_regs(dev, GT_CTRL_REG, &data, 1);
+	mdelay(100);
+	data = 0x00;		/* 停止软复位 */
+	gt9147_write_regs(dev, GT_CTRL_REG, &data, 1);
+	mdelay(100);
 	return 0;
 }
 
@@ -197,9 +215,28 @@ static irqreturn_t gt9147_irq_handler(int irq, void *dev_id)
     struct gt9147_dev *dev = dev_id;
 
     ret = gt9147_read_regs(dev, GT_GSTID_REG, &data, 1);
+    if (ret) {
+        /* I2C 读取失败：连续多次则软复位芯片，避免中断风暴空转 */
+        if (++gt9147.irq_fail_cnt >= 5) {
+            gt9147.irq_fail_cnt = 0;
+            gt9147_ts_soft_reset(dev);
+            dev_err(&dev->client->dev, "irq read fail x5, soft reset\n");
+        }
+        goto fail;
+    }
+    gt9147.irq_fail_cnt = 0;
+
     if (data == 0x00)  {     /* 没有触摸数据，直接返回 */
+        /* 中断风暴保护：连续多次"中断但无触摸数据"说明芯片 INT 异常，
+         * 主动软复位恢复，避免持续空转（表现为 /proc/interrupts 计数暴涨） */
+        if (++gt9147.irq_no_data_cnt >= 30) {
+            gt9147.irq_no_data_cnt = 0;
+            gt9147_ts_soft_reset(dev);
+            dev_err(&dev->client->dev, "irq storm (no-data x30), soft reset\n");
+        }
         goto fail;
     } else {                 /* 统计触摸点数据 */
+        gt9147.irq_no_data_cnt = 0;
         touch_num = data & 0x0f;
     }
 

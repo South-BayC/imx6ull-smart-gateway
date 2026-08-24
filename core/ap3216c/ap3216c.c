@@ -1,196 +1,272 @@
 // SPDX-License-Identifier: GPL-2.0
-/* ap3216c：AP3216C 环境光/接近传感器驱动（P4-B，手册 5.13.2）
- * 数据流: i2c_driver probe → miscdevice /dev/ap3216c0
- *         read() → 逐字节读 0x0A~0x0F → 解出 ir/als/ps（小端 u16）
- * 要点: probe 时一次初始化（软复位→上电使能），read 无锁（i2c 传输原子）；
- *       溢出标志位(IR.bit7 / PS.bit6)置位时对应值归 0；
- *       PS 寄存器为 0x0E/0x0F（手册骨架 0x10 系笔误，见 uapi/ap3216c.h）。
- * 参考: 正点原子 21_iic/ap3216c.c（逐字节读 + 数据解包，板级验证；
- *       曾用连续读 6 字节，板端实测数据帧交替失效，故改逐字节读），
- *       本项目按 P3/PWM 惯例改为 miscdevice + devm 多设备支持。
+/* ap3216c：AP3216C 环境光/接近传感器 IIO 驱动（P7-4，参考正点原子 27_iio）
+ * 框架: i2c_driver + regmap(I2C 8bit) + iio_dev（INDIO_DIRECT_MODE → sysfs 接口）
+ * 通道: in_illuminance_both_raw(ALS 16bit, 带 SCALE 量程)
+ *       in_proximity_raw(PS 10bit) / in_illuminance_ir_raw(IR 10bit)
+ *
+ * 板级经验（沿用 P4-B misc 版，勿丢）:
+ *   - 逐字节读寄存器：曾用连续 bulk 读 2/6 字节，板端实测数据帧交替失效
+ *     (IR_OF/PS_OF 置位 → 全 0 帧)，故 16bit 数据也拆两次单字节读；
+ *   - PS 寄存器 0x0E/0x0F（手册骨架 0x10 系笔误），值 = (hi&0x3F)<<4 | (lo&0x0F)；
+ *   - 溢出标志（IR: hi.bit7 / PS: hi.bit6）置位时对应值归 0；
+ *   - probe 一次初始化（软复位 → 使能 ALS+PS+IR），不重复复位避免数据流中断。
+ *
+ * 用户态: /sys/bus/iio/devices/iio:deviceX/{in_illuminance_both_raw,
+ *         in_proximity_raw, in_illuminance_ir_raw, in_illuminance_both_scale}
  */
 #include <linux/module.h>
 #include <linux/i2c.h>
-#include <linux/miscdevice.h>
-#include <linux/uaccess.h>
 #include <linux/delay.h>
-#include <linux/slab.h>
-#include <linux/fs.h>
+#include <linux/mutex.h>
+#include <linux/regmap.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
 
-#include "uapi/ap3216c.h"
+#define AP3216C_NAME "ap3216c"
 
-/* AP3216C 寄存器（正点原子 ap3216creg.h + datasheet） */
+/* 寄存器（正点原子 ap3216creg.h） */
 #define AP3216C_SYS_CONF	0x00	/* 系统配置 */
-#define AP3216C_IR_DATA		0x0A	/* IR 数据低字节（0x0B 为高） */
-#define AP3216C_ALS_DATA	0x0C	/* ALS 数据低字节（0x0D 为高） */
-#define AP3216C_PS_DATA		0x0E	/* PS 数据低字节（0x0F 为高） */
+#define AP3216C_IR_DATA_L	0x0A	/* IR 数据低字节 */
+#define AP3216C_ALS_DATA_L	0x0C	/* ALS 数据低字节 */
+#define AP3216C_PS_DATA_L	0x0E	/* PS 数据低字节 */
+#define AP3216C_ALS_CONF	0x10	/* ALS 配置（量程 [5:4]） */
 
 #define AP3216C_CONF_RESET	0x04	/* 软复位 */
 #define AP3216C_CONF_ENABLE	0x03	/* 开启 ALS+PS+IR */
 
-struct ap3216c_dev {
-	struct i2c_client *client;
-	struct miscdevice misc;
+/* 扫描元素索引 */
+enum ap3216c_scan {
+	AP3216C_ALS,
+	AP3216C_PS,
+	AP3216C_IR,
 };
 
-/* 读 1 字节寄存器（i2c_transfer 双消息）。
- * 注意: 曾用一次连续读 0x0A~0x0F 6 字节，板端实测出现数据帧交替失效
- *       (IR_OF/PS_OF 置位 → 全 0 帧)，改为与正点原子板级验证一致的逐字节读。 */
-static int ap3216c_read_reg(struct ap3216c_dev *d, u8 reg, u8 *val)
+/* ALS 量程表（lux，×1e6），对应 ALSCONFIG[5:4] = 0..3
+ * 量程依次 0~20661 / 0~5162 / 0~1291 / 0~323 lux */
+static const int als_scale_tbl[] = { 315000, 78800, 19700, 4900 };
+
+struct ap3216c_dev {
+	struct i2c_client *client;
+	struct regmap *regmap;
+	struct mutex lock;
+};
+
+/* 通道表：ALS(带量程) / PS / IR */
+static const struct iio_chan_spec ap3216c_channels[] = {
+	{	/* ALS 环境光（16bit，可设量程） */
+		.type = IIO_INTENSITY,
+		.modified = 1,
+		.channel2 = IIO_MOD_LIGHT_BOTH,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW) |
+				      BIT(IIO_CHAN_INFO_SCALE),
+		.scan_index = AP3216C_ALS,
+	},
+	{	/* PS 接近（10bit） */
+		.type = IIO_PROXIMITY,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.scan_index = AP3216C_PS,
+	},
+	{	/* IR 红外（10bit） */
+		.type = IIO_INTENSITY,
+		.modified = 1,
+		.channel2 = IIO_MOD_LIGHT_IR,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+		.scan_index = AP3216C_IR,
+	},
+};
+
+/* 读 16bit 数据：拆两次单字节 regmap 读（板级验证，见文件头注释） */
+static int ap3216c_read_data16(struct ap3216c_dev *d, u8 reg_low,
+			       unsigned int *val)
 {
-	struct i2c_msg msgs[2];
+	unsigned int lo, hi;
 	int ret;
 
-	msgs[0].addr = d->client->addr;
-	msgs[0].flags = 0;		/* 写: 发送寄存器地址 */
-	msgs[0].buf = &reg;
-	msgs[0].len = 1;
+	ret = regmap_read(d->regmap, reg_low, &lo);
+	if (ret)
+		return ret;
+	ret = regmap_read(d->regmap, reg_low + 1, &hi);
+	if (ret)
+		return ret;
 
-	msgs[1].addr = d->client->addr;
-	msgs[1].flags = I2C_M_RD;
-	msgs[1].buf = val;
-	msgs[1].len = 1;
-
-	ret = i2c_transfer(d->client->adapter, msgs, 2);
-	if (ret != 2)
-		return -EREMOTEIO;
+	*val = (hi << 8) | lo;
 	return 0;
 }
 
-/* 写 1 字节寄存器（i2c_transfer 单消息；buf 为 __u8* 与 msg.buf 类型一致，
- * 避免 i2c_master_send 的 const char* 触 -Wpointer-sign） */
-static int ap3216c_write_reg(struct ap3216c_dev *d, u8 reg, u8 val)
-{
-	struct i2c_msg msg;
-	u8 w[2] = { reg, val };
-	int ret;
-
-	msg.addr = d->client->addr;
-	msg.flags = 0;		/* 写 */
-	msg.buf = w;
-	msg.len = sizeof(w);
-
-	ret = i2c_transfer(d->client->adapter, &msg, 1);
-	if (ret != 1)
-		return ret < 0 ? ret : -EREMOTEIO;
-	return 0;
-}
-
-/* 软复位 + 上电使能 ALS/PS/IR（probe 时一次；open 不重复复位避免中断数据流） */
+/* 芯片初始化：软复位 → 使能 ALS+PS+IR（probe 时一次） */
 static int ap3216c_init_chip(struct ap3216c_dev *d)
 {
-	int ret;
-
-	ret = ap3216c_write_reg(d, AP3216C_SYS_CONF, AP3216C_CONF_RESET);
-	if (ret)
-		return ret;
-	msleep(50);		/* 复位至少 10ms，正点原子例程取 50ms */
-
-	ret = ap3216c_write_reg(d, AP3216C_SYS_CONF, AP3216C_CONF_ENABLE);
-	if (ret)
-		return ret;
+	regmap_write(d->regmap, AP3216C_SYS_CONF, AP3216C_CONF_RESET);
+	msleep(50);		/* 复位最少 10ms，取 50ms 稳妥 */
+	regmap_write(d->regmap, AP3216C_SYS_CONF, AP3216C_CONF_ENABLE);
+	regmap_write(d->regmap, AP3216C_ALS_CONF, 0x00);	/* ALS 量程 0（最大） */
 	return 0;
 }
 
-/* read: 一次性返回 ir/als/ps（3×u16 小端） */
-static ssize_t ap3216c_read(struct file *fp, char __user *buf,
-			    size_t cnt, loff_t *off)
+/* sysfs 读：IIO_CHAN_INFO_RAW / IIO_CHAN_INFO_SCALE */
+static int ap3216c_read_raw(struct iio_dev *indio_dev,
+			    struct iio_chan_spec const *chan,
+			    int *val, int *val2, long mask)
 {
-	struct ap3216c_dev *d = fp->private_data;
-	u8 raw[AP3216C_READ_LEN];
-	u16 data[3];
-	int ret, i;
+	struct ap3216c_dev *dev = iio_priv(indio_dev);
+	unsigned int data, regdata;
+	int ret = 0;
 
-	if (cnt < AP3216C_READ_LEN)
+	switch (mask) {
+	case IIO_CHAN_INFO_RAW:
+		mutex_lock(&dev->lock);
+		switch (chan->type) {
+		case IIO_INTENSITY:
+			if (chan->channel2 == IIO_MOD_LIGHT_BOTH) {
+				/* ALS 16bit 原始值 */
+				ret = ap3216c_read_data16(dev, AP3216C_ALS_DATA_L, &data);
+				if (!ret)
+					*val = (int)data;
+			} else {
+				/* IR 10bit：hi.bit7 溢出标志置位 → 归 0 */
+				ret = ap3216c_read_data16(dev, AP3216C_IR_DATA_L, &data);
+				if (!ret) {
+					if (data & 0x8000)
+						data = 0;
+					*val = (int)((data >> 8) << 2) | (int)(data & 0x03);
+				}
+			}
+			break;
+		case IIO_PROXIMITY:
+			/* PS 10bit：hi.bit6 溢出标志置位 → 归 0 */
+			ret = ap3216c_read_data16(dev, AP3216C_PS_DATA_L, &data);
+			if (!ret) {
+				if (data & 0x4000)
+					data = 0;
+				*val = (int)(((data >> 8) & 0x3F) << 4) |
+				       (int)(data & 0x0F);
+			}
+			break;
+		default:
+			ret = -EINVAL;
+			break;
+		}
+		mutex_unlock(&dev->lock);
+		return ret ? ret : IIO_VAL_INT;
+
+	case IIO_CHAN_INFO_SCALE:	/* ALS 量程（lux ×1e6） */
+		if (chan->type != IIO_INTENSITY)
+			return -EINVAL;
+		mutex_lock(&dev->lock);
+		ret = regmap_read(dev->regmap, AP3216C_ALS_CONF, &regdata);
+		if (!ret) {
+			*val = 0;
+			*val2 = als_scale_tbl[(regdata & 0x30) >> 4];
+		}
+		mutex_unlock(&dev->lock);
+		return ret ? ret : IIO_VAL_INT_PLUS_MICRO;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+/* sysfs 写：设置 ALS 量程（用户写 val2，单位 lux×1e6） */
+static int ap3216c_write_raw(struct iio_dev *indio_dev,
+			     struct iio_chan_spec const *chan,
+			     int val, int val2, long mask)
+{
+	struct ap3216c_dev *dev = iio_priv(indio_dev);
+	int i, ret = -EINVAL;
+
+	if (mask != IIO_CHAN_INFO_SCALE || chan->type != IIO_INTENSITY)
 		return -EINVAL;
 
-	/* 逐字节读 0x0A~0x0F（与正点原子一致；连续读实测会致数据帧交替失效） */
-	for (i = 0; i < AP3216C_READ_LEN; i++) {
-		ret = ap3216c_read_reg(d, AP3216C_IR_DATA + i, &raw[i]);
-		if (ret)
-			return ret;
+	mutex_lock(&dev->lock);
+	for (i = 0; i < ARRAY_SIZE(als_scale_tbl); i++) {
+		if (als_scale_tbl[i] == val2) {
+			ret = regmap_write(dev->regmap, AP3216C_ALS_CONF,
+					   (u8)(i << 4));
+			break;
+		}
 	}
-
-	/* IR: 0x0A.bit7=溢出标志; 有效 10 位 = 高字节<<2 | 低字节低 2 位 */
-	if (raw[0] & 0x80)
-		data[0] = 0;
-	else
-		data[0] = (u16)(raw[1] << 2) | (raw[0] & 0x03);
-
-	/* ALS: 0x0C/0x0D 直接拼 16 位（bit15:12 通常为 0） */
-	data[1] = (u16)(raw[3] << 8) | raw[2];
-
-	/* PS: 0x0E.bit6=溢出标志; 有效 10 位 = (高字节&0x3F)<<4 | 低字节低 4 位 */
-	if (raw[4] & 0x40)
-		data[2] = 0;
-	else
-		data[2] = (u16)((raw[5] & 0x3F) << 4) | (raw[4] & 0x0F);
-
-	if (copy_to_user(buf, data, sizeof(data)))
-		return -EFAULT;
-	return sizeof(data);
+	mutex_unlock(&dev->lock);
+	return ret;
 }
 
-static int ap3216c_open(struct inode *inode, struct file *fp)
+/* 用户空间写数值格式 */
+static int ap3216c_write_raw_get_fmt(struct iio_dev *indio_dev,
+				     struct iio_chan_spec const *chan,
+				     long mask)
 {
-	struct ap3216c_dev *d = container_of(fp->private_data,
-					     struct ap3216c_dev, misc);
-
-	fp->private_data = d;
-	return 0;
+	return IIO_VAL_INT_PLUS_MICRO;
 }
 
-static const struct file_operations ap3216c_fops = {
-	.owner  = THIS_MODULE,
-	.open   = ap3216c_open,
-	.read   = ap3216c_read,
-	.llseek = no_llseek,
+static const struct iio_info ap3216c_info = {
+	.read_raw		= ap3216c_read_raw,
+	.write_raw		= ap3216c_write_raw,
+	.write_raw_get_fmt	= ap3216c_write_raw_get_fmt,
 };
 
 static int ap3216c_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
-	struct device *dev = &client->dev;
-	struct ap3216c_dev *d;
 	int ret;
+	struct ap3216c_dev *dev;
+	struct iio_dev *indio_dev;
+	struct regmap_config regmap_config = { 0 };
 
-	d = devm_kzalloc(dev, sizeof(*d), GFP_KERNEL);
-	if (!d)
+	/* 1、申请 iio_dev 内存（私有数据随附） */
+	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*dev));
+	if (!indio_dev)
 		return -ENOMEM;
-	d->client = client;
-	i2c_set_clientdata(client, d);
 
-	ret = ap3216c_init_chip(d);
+	dev = iio_priv(indio_dev);
+	dev->client = client;
+	i2c_set_clientdata(client, indio_dev);
+
+	/* 2、regmap(I2C)：8bit 寄存器 / 8bit 值 */
+	regmap_config.reg_bits = 8;
+	regmap_config.val_bits = 8;
+	dev->regmap = regmap_init_i2c(client, &regmap_config);
+	if (IS_ERR(dev->regmap))
+		return PTR_ERR(dev->regmap);
+
+	mutex_init(&dev->lock);
+
+	/* 3、iio_dev 成员 */
+	indio_dev->dev.parent = &client->dev;
+	indio_dev->info = &ap3216c_info;
+	indio_dev->name = AP3216C_NAME;
+	indio_dev->modes = INDIO_DIRECT_MODE;	/* sysfs 直接模式 */
+	indio_dev->channels = ap3216c_channels;
+	indio_dev->num_channels = ARRAY_SIZE(ap3216c_channels);
+
+	/* 4、初始化芯片（先于注册，避免 sysfs 早于芯片就绪） */
+	ap3216c_init_chip(dev);
+
+	/* 5、注册 iio_dev */
+	ret = iio_device_register(indio_dev);
 	if (ret) {
-		dev_err(dev, "chip init failed: %d\n", ret);
+		dev_err(&client->dev, "iio_device_register failed\n");
+		regmap_exit(dev->regmap);
 		return ret;
 	}
 
-	/* misc 注册（初始化成功后再暴露设备节点） */
-	d->misc.minor  = MISC_DYNAMIC_MINOR;
-	d->misc.name   = "ap3216c0";
-	d->misc.fops   = &ap3216c_fops;
-	d->misc.parent = dev;
-	ret = misc_register(&d->misc);
-	if (ret)
-		return ret;
-
-	dev_info(dev, "AP3216C ready (als/ps/ir), node /dev/ap3216c0\n");
+	dev_info(&client->dev, "AP3216C IIO ready\n");
 	return 0;
 }
 
 static int ap3216c_remove(struct i2c_client *client)
 {
-	struct ap3216c_dev *d = i2c_get_clientdata(client);
+	struct iio_dev *indio_dev = i2c_get_clientdata(client);
+	struct ap3216c_dev *dev = iio_priv(indio_dev);
 
-	misc_deregister(&d->misc);
+	iio_device_unregister(indio_dev);
+	regmap_exit(dev->regmap);
 	return 0;
 }
 
 static const struct i2c_device_id ap3216c_id[] = {
-	{ "ap3216c", 0 },
-	{}
+	{ "alientek,ap3216c", 0 },
+	{ /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(i2c, ap3216c_id);
 
 static const struct of_device_id ap3216c_of_match[] = {
 	{ .compatible = "alientek,ap3216c" },
@@ -199,13 +275,16 @@ static const struct of_device_id ap3216c_of_match[] = {
 MODULE_DEVICE_TABLE(of, ap3216c_of_match);
 
 static struct i2c_driver ap3216c_driver = {
-	.probe    = ap3216c_probe,
-	.remove   = ap3216c_remove,
-	.id_table = ap3216c_id,
+	.probe  = ap3216c_probe,
+	.remove = ap3216c_remove,
 	.driver = {
-		.name = "ap3216c",
+		.name = AP3216C_NAME,
 		.of_match_table = ap3216c_of_match,
 	},
+	.id_table = ap3216c_id,
 };
 module_i2c_driver(ap3216c_driver);
+
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("ALIENTEK / SouthBay");
+MODULE_DESCRIPTION("AP3216C ALS/PS/IR IIO driver");
