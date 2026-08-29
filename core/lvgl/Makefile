@@ -33,6 +33,11 @@ $(BUILD_LVGL_DIR)/%.o: %.c $(CURDIR)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# cam_feed 转换循环为帧率热点：单独 -O3 + NEON（行转换 8 像素/迭代）
+$(BUILD_LVGL_DIR)/src/cam_feed.o: src/cam_feed.c $(CURDIR)/lv_conf.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -O3 -mfpu=neon -c $< -o $@
+
 # 模拟器（SDL，宿主机）
 SIM_TARGET := $(BUILD_LVGL_DIR)/lvgl_sim
 SIM_SRCS   := $(filter-out src/main.c,$(APP_SRCS)) src/sim_main.c $(LVGL_SRCS_ALL)

@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -178,6 +179,11 @@ void lv_linux_fbdev_set_file(lv_display_t * disp, const char * file)
     }
 #endif /* LV_LINUX_FBDEV_BSD */
 
+    /* [08-29 pan 双缓冲实验结论] 本 BSP 的 mxsfb flip_complete 中断不触发
+     * （FBIOPAN 每次等待超时 "mxs wait for pan flip timeout"），pan 不可用，
+     * 已完整回退。撕裂为单缓冲直写的平台限制，根治需先修 mxsfb 翻页中断
+     * 机制（遗留项，见《项目进度.md》3.8 节）。 */
+
     LV_LOG_INFO("%dx%d, %dbpp", dsc->vinfo.xres, dsc->vinfo.yres, dsc->vinfo.bits_per_pixel);
 
     /* Figure out the size of the screen in bytes*/
@@ -253,6 +259,7 @@ void lv_linux_fbdev_set_force_refresh(lv_display_t * disp, bool enabled)
 static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * color_p)
 {
     lv_linux_fb_t * dsc = lv_display_get_driver_data(disp);
+    static int wait_vsync = 1;   /* 每刷新周期仅首个分块前等一次 vsync */
 
     if(dsc->fbp == NULL) {
         lv_display_flush_ready(disp);
@@ -312,6 +319,17 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * colo
         return;
     }
 
+    /* 撕裂根治（08-29 定案）：vsync 锁相 + 大缓冲单块拷贝。
+     * 机制：等 vsync 边沿后立即拷贝（写速度 ~0.0103ms/行 > 扫描 ~0.0278ms/行，
+     * 写指针全程领先扫描指针），拷贝总量 < 画布扫描窗 → 无撕裂。
+     * 每刷新周期仅等一次（首个分块前），后续分块自然落在同一扫描窗内。
+     * [此前两次失败的原因：400 行缺相位锁定 / vsync 缺单块拷贝——组合后互补] */
+    if(wait_vsync && dsc->fbfd >= 0) {
+        int dummy = 0;
+        ioctl(dsc->fbfd, FBIO_WAITFORVSYNC, &dummy);
+        wait_vsync = 0;
+    }
+
     uint32_t fb_pos =
         (area->x1 + dsc->vinfo.xoffset) * px_size +
         (area->y1 + dsc->vinfo.yoffset) * dsc->finfo.line_length;
@@ -344,6 +362,8 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * colo
             perror("Error setting var screen info");
         }
     }
+
+    if(lv_display_flush_is_last(disp)) wait_vsync = 1;   /* 下个刷新周期重新锁相 */
 
     lv_display_flush_ready(disp);
 }

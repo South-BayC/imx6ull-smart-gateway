@@ -996,7 +996,10 @@
 #define LV_LINUX_FBDEV_BSD           0
 #define LV_LINUX_FBDEV_RENDER_MODE   LV_DISPLAY_RENDER_MODE_PARTIAL
 #define LV_LINUX_FBDEV_BUFFER_COUNT  2
-#define LV_LINUX_FBDEV_BUFFER_SIZE   60
+#define LV_LINUX_FBDEV_BUFFER_SIZE   400  /* 08-29 定案：60→400 行（画布 340 行单块刷完），
+                                           配合 flush_cb 的 vsync 锁相 → 无撕裂。
+                                           （单独上 400 行会整幅位移，必须配 vsync）；
+                                           缓冲 1024×400×2×2 ≈ 1.6MB */
 #endif
 
 /*Use Nuttx to open window and handle touchscreen*/

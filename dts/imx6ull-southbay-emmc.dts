@@ -144,9 +144,14 @@
 		compatible = "spi-gpio";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_spi4>;
+		/* 74HC595 锁存/片选（GPIO5_IO07）：出厂参考 dts 同款。
+		 * ★冲突处理：GPIO5_IO07 原为 fec1(eth1) phy-reset 复位脚，eth1 本板未用，
+		 *   fec1 已让出该脚（见 &fec1）。eth0(NFS)=fec2 用 GPIO5_IO08，不受影响。
+		 * ★不加 pinctrl-assert-gpios（GPIO5_IO08 属 fec2 enet2grp，抢脚会拖垮 eth0）。 */
 		status = "okay";
 		gpio-sck = <&gpio5 11 0>;
 		gpio-mosi = <&gpio5 10 0>;
+		cs-gpios = <&gpio5 7 0>;
 		num-chipselects = <1>;
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -238,12 +243,12 @@
 
 &fec1 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_enet1
-		     &pinctrl_enet1_reset>;
+	pinctrl-0 = <&pinctrl_enet1>;
 	phy-mode = "rmii";
 	phy-handle = <&ethphy0>;
-	phy-reset-gpios = <&gpio5 7 GPIO_ACTIVE_LOW>;
-	phy-reset-duration = <200>;
+	/* phy-reset-gpios/phy-reset-duration 已移除：复位脚 GPIO5_IO07(SNVS_TAMPER7)
+	 * 与 74HC595 锁存脚（spi4 cs-gpios）同脚，本板 eth0 的 PHY 依赖上电复位即可
+	 * （fec2 无 phy-reset 且板测 eth0 正常，见 20b4000.ethernet Link Up）。 */
 	status = "okay";
 };
 
@@ -369,18 +374,18 @@
 
 		pinctrl_csi1: csi1grp {
 			fsl,pins = <
-				MX6UL_PAD_CSI_MCLK__CSI_MCLK		0x1b088
-				MX6UL_PAD_CSI_PIXCLK__CSI_PIXCLK	0x1b088
-				MX6UL_PAD_CSI_VSYNC__CSI_VSYNC		0x1b088
-				MX6UL_PAD_CSI_HSYNC__CSI_HSYNC		0x1b088
-				MX6UL_PAD_CSI_DATA00__CSI_DATA02	0x1b088
-				MX6UL_PAD_CSI_DATA01__CSI_DATA03	0x1b088
-				MX6UL_PAD_CSI_DATA02__CSI_DATA04	0x1b088
-				MX6UL_PAD_CSI_DATA03__CSI_DATA05	0x1b088
-				MX6UL_PAD_CSI_DATA04__CSI_DATA06	0x1b088
-				MX6UL_PAD_CSI_DATA05__CSI_DATA07	0x1b088
-				MX6UL_PAD_CSI_DATA06__CSI_DATA08	0x1b088
-				MX6UL_PAD_CSI_DATA07__CSI_DATA09	0x1b088
+				MX6UL_PAD_CSI_MCLK__CSI_MCLK		0x1b0f9
+				MX6UL_PAD_CSI_PIXCLK__CSI_PIXCLK	0x1b0f9
+				MX6UL_PAD_CSI_VSYNC__CSI_VSYNC		0x1b0f9
+				MX6UL_PAD_CSI_HSYNC__CSI_HSYNC		0x1b0f9
+				MX6UL_PAD_CSI_DATA00__CSI_DATA02	0x1b0f9
+				MX6UL_PAD_CSI_DATA01__CSI_DATA03	0x1b0f9
+				MX6UL_PAD_CSI_DATA02__CSI_DATA04	0x1b0f9
+				MX6UL_PAD_CSI_DATA03__CSI_DATA05	0x1b0f9
+				MX6UL_PAD_CSI_DATA04__CSI_DATA06	0x1b0f9
+				MX6UL_PAD_CSI_DATA05__CSI_DATA07	0x1b0f9
+				MX6UL_PAD_CSI_DATA06__CSI_DATA08	0x1b0f9
+				MX6UL_PAD_CSI_DATA07__CSI_DATA09	0x1b0f9
 			>;
 		};
 
@@ -394,7 +399,7 @@
 				MX6UL_PAD_ENET1_TX_DATA0__ENET1_TDATA00	0x1b0b0
 				MX6UL_PAD_ENET1_TX_DATA1__ENET1_TDATA01	0x1b0b0
 				MX6UL_PAD_ENET1_TX_CLK__ENET1_REF_CLK1	0x4001b031
-				MX6UL_PAD_SNVS_TAMPER7__GPIO5_IO07	0x10B0
+				/* SNVS_TAMPER7(GPIO5_IO07) 已移除：该脚交 spi4 cs-gpios（74HC595 锁存）独占 */
 			>;
 		};
 
@@ -724,6 +729,7 @@
 			fsl,pins = <
 				MX6ULL_PAD_BOOT_MODE0__GPIO5_IO10	0x70a1
 				MX6ULL_PAD_BOOT_MODE1__GPIO5_IO11	0x70a1
+				MX6ULL_PAD_SNVS_TAMPER7__GPIO5_IO07	0x70a1
 			>;
 		};
 
@@ -831,11 +837,9 @@
 };
 
 &tsc {
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_tsc>;
-	measure-delay-time = <0xffff>;
-	pre-charge-time = <0xfff>;
-	status = "okay";
+	/* 芯片内部电阻触摸控制器（TSC）：本项目用 GT9147 电容触摸（I2C），TSC 不使用。
+	 * 缺 xnur-gpios 时驱动 probe 必报 -ENOENT，禁用清理启动日志（2026-08-29 决策）。 */
+	status = "disabled";
 };
 
 &uart1 {

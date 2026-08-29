@@ -77,6 +77,13 @@ make send         # 部署：.ko/.test/sump 产物 → NFS rootfs，.dtb → TFT
   - 传感器 IIO 迁移（AP3216C/ICM20608 regmap+iio_dev，sysfs 接口）；GT9147 中断风暴自愈（软复位）
   - KEY0 屏幕唤醒（10 分钟无操作息屏）；亮度联动 LCD 背光；定时布防时间段可设自动执行
 - [x] P7-4 显示优化（fbdev 双渲染缓冲 + 摄像头 canvas 局部刷新 + YUV 查表转换 30fps）
+- [x] P7-5 双模式入侵判别第一批 + 抓拍链路完善（2026-08-23，提交 aec11d0/cb2cbf1 已推送）
+  - 粗判引擎（帧差法 80×50 降采样，阈值可调）+ 识别模式选择 UI + MOTION 触发链路（当前预览通道→分区告警）
+  - TF 抓拍文件名协议（snap_z<zone>_<cmp>_<HHMMSS>.bmp）+ 重启相册恢复 + 满卡清理；MQTT 零依赖发布客户端
+- [x] P7-6 摄像头（OV5640 CSI）链路打通 + 预览质量修复（2026-08-28~29，待板端复测数据回填）
+  - 内核补配置（历次重编丢失）：VIDEO_MXC_CSI_CAMERA（6ULL CSI 主机 mx6s_capture，注意 VIDEO_MXC_CAPTURE 是 IPU 栈对 6ULL 无效）/ MXC_CAMERA_OV5640 / SPI_GPIO + GPIO_74X164（74HC595，ov5640 pwn/rst 提供者）；PXP V4L2 关闭让出 video0
+  - dts：spi4 补 cs-gpios=GPIO5_IO07（基线潜伏缺失）；fec1(eth1 未用) 让出 GPIO5_IO07（**网口拓扑：eth0=fec2@20b4000**，板测 Link Up）；&tsc 禁用（缺 xnur-gpios，项目用 GT9147）
+  - 预览质量：G 通道 U/V 系数写反修复（偏色根因）、翻转映射（180° 可调）、双缓冲 ping-pong 消撕裂、sensor/conv/conv_ms 诊断计数定位 8fps 瓶颈（每 5s 打印）
 
 ## 验收
 

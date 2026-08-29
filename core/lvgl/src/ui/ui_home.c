@@ -177,6 +177,9 @@ static lv_obj_t *g_zone_dots[ZONE_COUNT];
 static lv_obj_t *g_event_list      = NULL;
 static lv_obj_t *g_event_count_lbl = NULL;
 static lv_obj_t *g_scanline        = NULL;
+static lv_obj_t *g_cam_grid_lines[32];   /* 网格线句柄（有画面隐藏，无画面显示） */
+static int       g_cam_grid_cnt    = 0;
+static int       g_cam_overlay_hidden = 0;   /* 1=占位文字/网格已隐藏（有画面） */
 static lv_obj_t *g_toast           = NULL;
 static lv_obj_t *g_overlay_detail  = NULL;
 static lv_obj_t *g_overlay_settings= NULL;
@@ -203,7 +206,7 @@ static lv_obj_t *g_confirm_bar       = NULL;  /* 长按进度条 */
 static uint32_t  g_confirm_tick      = 0;     /* 长按起始 tick（0=未按） */
 static int       g_alarm_zone        = -1;    /* 告警分区索引 */
 
-/* 摄像头画布（630×340 铺满画面区，静态缓冲 ≈428KB 不占 LVGL 堆；cam_feed 线程直写） */
+/* 摄像头画布（630×340 铺满画面区，静态缓冲 ≈428KB 不占 LVGL 堆；UI 定时器从 cam_feed 双缓冲 blit） */
 static uint8_t g_cam_canvas_buf[CAM_DISP_W * CAM_DISP_H * 2];
 static lv_obj_t *g_cam_canvas = NULL;       /* canvas 对象 */
 
@@ -1264,7 +1267,7 @@ static void _build_cam_wrap(lv_obj_t *par)
         }
     }
 
-    /* ---- 网格线（用多个细长对象模拟，从两行头部下方开始） ---- */
+    /* ---- 网格线（用多个细长对象模拟，从两行头部下方开始；有画面时隐藏） ---- */
     /* 横线 */
     for (int y = CAM_PIC_Y; y < CAM_H; y += 48) {
         lv_obj_t *line = uiw_obj(cam);
@@ -1273,6 +1276,8 @@ static void _build_cam_wrap(lv_obj_t *par)
         lv_obj_set_style_bg_opa(line, LV_OPA_20, 0);
         lv_obj_set_style_bg_color(line, lv_color_hex(CLR_BORDER), 0);
         lv_obj_align(line, LV_ALIGN_TOP_LEFT, 0, y);
+        if (g_cam_grid_cnt < (int)(sizeof(g_cam_grid_lines) / sizeof(g_cam_grid_lines[0])))
+            g_cam_grid_lines[g_cam_grid_cnt++] = line;
     }
     /* 竖线 */
     for (int x = 48; x < LEFT_W; x += 48) {
@@ -1282,6 +1287,8 @@ static void _build_cam_wrap(lv_obj_t *par)
         lv_obj_set_style_bg_opa(line, LV_OPA_20, 0);
         lv_obj_set_style_bg_color(line, lv_color_hex(CLR_BORDER), 0);
         lv_obj_align(line, LV_ALIGN_TOP_LEFT, x, 0);
+        if (g_cam_grid_cnt < (int)(sizeof(g_cam_grid_lines) / sizeof(g_cam_grid_lines[0])))
+            g_cam_grid_lines[g_cam_grid_cnt++] = line;
     }
 
     /* ---- 十字准星（居中于两行头部下方的画面区） ---- */
@@ -1589,6 +1596,8 @@ static void _on_volume_cb(lv_event_t *e)
 }
 
 /* ---- 识别模式（云端精判=粗判+上传 / 本地精判=粗判+NCNN，设置页切换联动徽章） ---- */
+static void _dm_refresh(void);   /* 前向声明：定义于下方 */
+
 static void _on_dm_sel(lv_event_t *e)
 {
     g_detect_mode = (int)(intptr_t)lv_event_get_user_data(e);
@@ -3139,13 +3148,30 @@ void ui_home_create(lv_obj_t *parent)
     }
 }
 
-/* 摄像头帧刷新：cam_feed 线程写完缓冲后置标志，此处局部 invalidate
- * （v9 canvas 是普通对象，用 lv_obj_invalidate） */
+/* 摄像头帧刷新：拷贝最新完成帧（双缓冲发布）后局部 invalidate
+ * （v9 canvas 是普通对象，用 lv_obj_invalidate）。
+ * 附：有画面隐藏占位文字/网格线，断流自动恢复（需求 08-29） */
 static void _cam_refresh_cb(lv_timer_t *timer)
 {
     (void)timer;
-    if (cam_feed_frame_ready() && g_cam_canvas)
+    if (g_cam_canvas && cam_feed_blit_if_ready(g_cam_canvas_buf))
         lv_obj_invalidate(g_cam_canvas);
+
+    if (g_cam_grid_cnt > 0 || g_cam_text_lbl) {
+        int hide = cam_feed_stream_ok();
+        if (hide != g_cam_overlay_hidden) {
+            for (int i = 0; i < g_cam_grid_cnt; i++) {
+                if (!g_cam_grid_lines[i]) continue;
+                if (hide) lv_obj_add_flag(g_cam_grid_lines[i], LV_OBJ_FLAG_HIDDEN);
+                else      lv_obj_clear_flag(g_cam_grid_lines[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            if (g_cam_text_lbl) {
+                if (hide) lv_obj_add_flag(g_cam_text_lbl, LV_OBJ_FLAG_HIDDEN);
+                else      lv_obj_clear_flag(g_cam_text_lbl, LV_OBJ_FLAG_HIDDEN);
+            }
+            g_cam_overlay_hidden = hide;
+        }
+    }
 }
 
 /* ================================================================
