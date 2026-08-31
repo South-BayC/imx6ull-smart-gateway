@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1024, initial-scale=1.0">
+<title>i.MX6ULL 智能安防边缘网关 - 1024x600 Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ===== CSS 变量 - 工业调色板 ===== */
+:root {
+  --bg-primary: #0B1220;
+  --bg-card: #1B2A4A;
+  --bg-card-alt: #162240;
+  --border: #253656;
+  --border-light: #2E4268;
+  --text-hi: #E6EDF7;
+  --text-lo: #8A9AB5;
+  --text-dim: #5A6A85;
+  --cyan: #00D1FF;
+  --green: #20C997;
+  --amber: #FFB020;
+  --red: #FF4D4F;
+}
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Noto Sans SC', sans-serif;
+  background: #060A14;
+  color: var(--text-hi);
+  overflow: hidden;
+  height: 100vh; width: 100vw;
+  display: flex; align-items: center; justify-content: center;
+}
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* ===== 固定画布 1024x600 ===== */
+#canvas {
+  width: 1024px; height: 600px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+
+/* ===== 顶部说明条 ===== */
+.info-bar {
+  height: 22px; min-height: 22px;
+  background: linear-gradient(90deg, rgba(0,209,255,0.08), rgba(255,176,32,0.08));
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--text-dim); letter-spacing: 0.5px;
+}
+
+/* ===== 顶部状态栏 ===== */
+.status-bar {
+  height: 36px; min-height: 36px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; position: relative;
+}
+.status-bar::after {
+  content:''; position:absolute; bottom:0; left:0; right:0; height:1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+  opacity: 0.25;
+}
+.status-left { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; }
+.status-left .dot { color: var(--cyan); font-size:16px; }
+.status-center { font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--text-lo); }
+.status-right { display:flex; align-items:center; gap:14px; font-size:12px; color:var(--text-lo); }
+.status-light { width:8px; height:8px; border-radius:50%; position:relative; }
+.status-light.on { background:var(--green); box-shadow:0 0 6px var(--green); }
+.status-light.on::after {
+  content:''; position:absolute; top:-4px; left:-4px;
+  width:16px; height:16px; border-radius:50%;
+  border:1px solid var(--green);
+  animation: pulse-ring 2s ease-out infinite;
+}
+.status-light.warn { background:var(--amber); box-shadow:0 0 6px var(--amber); }
+@keyframes pulse-ring {
+  0% { transform:scale(0.7); opacity:1; }
+  100% { transform:scale(2); opacity:0; }
+}
+.sr-item { display:flex; align-items:center; gap:5px; }
+
+/* ===== 主内容区 ===== */
+.main-area {
+  flex:1; display:flex; padding:6px 8px; gap:8px;
+  min-height:0;
+}
+
+/* ===== 左侧 - 摄像头预览 ===== */
+.left-col { width:630px; display:flex; flex-direction:column; gap:6px; min-height:0; }
+.cam-wrap {
+  flex:0 0 auto; height:310px;
+  background:#000; border:1px solid var(--border);
+  position:relative; overflow:hidden;
+}
+.grid-overlay {
+  position:absolute; inset:0;
+  background-image:
+    linear-gradient(rgba(37,54,86,0.25) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37,54,86,0.25) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+.crosshair { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:80px; height:80px; }
+.crosshair .h, .crosshair .v { position:absolute; background:var(--cyan); opacity:0.5; }
+.crosshair .h { top:50%; left:0; width:100%; height:1px; transform:translateY(-0.5px); }
+.crosshair .v { left:50%; top:0; height:100%; width:1px; transform:translateX(-0.5px); }
+.scanline {
+  position:absolute; left:0; right:0; height:1px;
+  background: linear-gradient(90deg, transparent 5%, var(--cyan) 50%, transparent 95%);
+  opacity:0.35; animation: scan-move 5s linear infinite; pointer-events:none;
+}
+@keyframes scan-move { 0%{top:0} 100%{top:100%} }
+/* ===== 新增：摄像头顶部栏（容纳模式徽标+切换钮+通道信息，单行不遮挡画面） ===== */
+.cam-header {
+  position:relative; z-index:10;
+  display:flex; align-items:center; justify-content:space-between;
+  gap:10px; padding:8px 10px;
+  background:rgba(0,0,0,0.35); border-bottom:1px solid rgba(37,54,86,0.3);
+}
+.cam-header .mode-badge {
+  position:static;
+  background:rgba(0,209,255,0.12); border:1px solid rgba(0,209,255,0.5);
+  padding:3px 10px; font-size:11px; color:var(--cyan); letter-spacing:0.5px;
+  white-space:nowrap; flex-shrink:0;
+}
+.cam-header .cam-title {
+  position:static;
+  font-size:10px; color:var(--text-dim);
+  font-family:'JetBrains Mono',monospace;
+  white-space:nowrap; flex-shrink:0;
+}
+.cam-header .cam-switcher {
+  position:static; transform:none;
+  display:flex; gap:8px; z-index:auto;
+}
+.capture-btn {
+  position:absolute; bottom:10px; right:10px;
+  background:rgba(255,176,32,0.15); border:1px solid var(--amber);
+  color:var(--amber); padding:5px 14px; font-size:11px;
+  cursor:pointer; transition:all 0.15s; user-select:none;
+}
+.capture-btn:active { transform:scale(0.94); background:var(--amber); color:#000; }
+.cam-title {
+  position:absolute; top:38px; right:10px;
+  font-size:10px; color:var(--text-dim);
+  font-family:'JetBrains Mono',monospace;
+}
+
+/* ===== 新增A：摄像头切换按钮组 ===== */
+.cam-switcher {
+  position:absolute; top:10px; left:50%; transform:translateX(-50%);
+  display:flex; gap:8px; z-index:10;
+}
+.cam-pill {
+  padding:4px 14px; font-size:11px; font-weight:500;
+  border:1px solid var(--border); background:transparent;
+  color:var(--text-lo); cursor:pointer; transition:all 0.2s;
+  user-select:none; letter-spacing:0.3px;
+}
+.cam-pill:hover { border-color:var(--border-light); color:var(--text-hi); }
+.cam-pill.active {
+  background:var(--cyan); border-color:var(--cyan);
+  color:#fff; box-shadow:0 0 8px rgba(0,209,255,0.3);
+}
+
+/* ===== 摄像头预览切换过渡 ===== */
+.cam-preview-area {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  transition: opacity 0.3s ease;
+}
+.cam-preview-area.fade-out { opacity:0; }
+.cam-preview-text {
+  font-size:16px; color:var(--text-dim); letter-spacing:2px;
+  text-align:center; pointer-events:none;
+}
+
+/* ===== 左侧 - 2x2 分区卡片 ===== */
+.zones-grid {
+  flex:1; display:grid; grid-template-columns:1fr 1fr;
+  gap:6px; min-height:0;
+}
+.zone-card {
+  background:var(--bg-card); border:1px solid var(--border);
+  padding:10px 12px; cursor:pointer; position:relative;
+  transition: all 0.2s; display:flex; flex-direction:column;
+  justify-content:center;
+}
+.zone-card:hover { border-color:var(--border-light); }
+.zone-card.armed { border-color:var(--green); animation: zone-glow 2.5s ease-in-out infinite; }
+.zone-card.alarm { border-color:var(--red); animation: alarm-blink 0.6s ease-in-out infinite; }
+.zone-card.cam-selected {
+  border-color:var(--cyan) !important;
+  box-shadow: inset 0 0 12px rgba(0,209,255,0.1), 0 0 8px rgba(0,209,255,0.2) !important;
+}
+@keyframes zone-glow {
+  0%,100% { box-shadow:inset 0 0 8px rgba(32,201,151,0.08), 0 0 4px rgba(32,201,151,0.15); }
+  50% { box-shadow:inset 0 0 16px rgba(32,201,151,0.15), 0 0 12px rgba(32,201,151,0.3); }
+}
+@keyframes alarm-blink {
+  0%,100% { box-shadow:inset 0 0 8px rgba(255,77,79,0.1), 0 0 4px rgba(255,77,79,0.2); }
+  50% { box-shadow:inset 0 0 20px rgba(255,77,79,0.25), 0 0 15px rgba(255,77,79,0.5); }
+}
+.zone-name { font-size:13px; font-weight:500; margin-bottom:4px; display:flex; align-items:center; gap:6px; }
+.zone-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.zone-dot.online { background:var(--green); box-shadow:0 0 4px var(--green); }
+.zone-dot.offline { background:var(--text-dim); }
+.zone-dot.alarm { background:var(--red); box-shadow:0 0 4px var(--red); }
+.zone-status-text { font-size:11px; color:var(--text-lo); }
+.zone-id { font-size:9px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; margin-top:3px; }
+
+/* ===== 右侧 - 事件时间轴 ===== */
+.right-col { width:360px; display:flex; flex-direction:column; min-height:0; }
+.events-header {
+  padding:6px 12px; background:var(--bg-card);
+  border:1px solid var(--border); border-bottom:none;
+  font-size:12px; color:var(--text-lo);
+  display:flex; justify-content:space-between; align-items:center;
+}
+.events-header .count {
+  background:rgba(0,209,255,0.12); color:var(--cyan);
+  padding:1px 8px; font-size:10px; font-family:'JetBrains Mono',monospace;
+}
+.events-list {
+  flex:1; background:var(--bg-card); border:1px solid var(--border);
+  overflow-y:auto; padding:4px 0;
+}
+.events-list::-webkit-scrollbar { width:3px; }
+.events-list::-webkit-scrollbar-track { background:transparent; }
+.events-list::-webkit-scrollbar-thumb { background:var(--border-light); border-radius:2px; }
+.event-item {
+  padding:8px 12px; border-bottom:1px solid rgba(37,54,86,0.4);
+  display:flex; gap:10px; align-items:flex-start;
+  transition:background 0.15s;
+}
+.event-item:hover { background:rgba(0,209,255,0.04); }
+.event-item:last-child { border-bottom:none; }
+.event-time {
+  font-family:'JetBrains Mono',monospace; font-size:10px;
+  color:var(--text-dim); white-space:nowrap; min-width:42px; padding-top:1px;
+}
+.event-dot { width:6px; height:6px; border-radius:50%; margin-top:4px; flex-shrink:0; }
+.event-dot.info { background:var(--cyan); }
+.event-dot.warn { background:var(--amber); }
+.event-dot.error { background:var(--red); }
+.event-dot.ok { background:var(--green); }
+.event-body { flex:1; min-width:0; }
+.event-title { font-size:12px; color:var(--text-hi); line-height:1.4; }
+.event-loc { font-size:10px; color:var(--text-dim); margin-top:1px; }
+
+/* ===== 新增B：事件"查看"按钮 ===== */
+.event-view-btn {
+  font-size:10px; padding:2px 8px; margin-top:2px;
+  border:1px solid var(--border); background:transparent;
+  color:var(--text-lo); cursor:pointer; transition:all 0.15s;
+  white-space:nowrap; user-select:none;
+}
+.event-view-btn:hover { border-color:var(--cyan); color:var(--cyan); }
+.event-view-btn:active { transform:scale(0.94); }
+
+/* ===== 新增C：告警级别徽章 ===== */
+.level-badge {
+  display:inline-block; font-size:9px; padding:1px 6px;
+  font-weight:500; letter-spacing:0.3px; margin-top:3px;
+}
+.level-badge.high { background:rgba(255,77,79,0.15); color:var(--red); border:1px solid rgba(255,77,79,0.4); }
+.level-badge.medium { background:rgba(255,176,32,0.15); color:var(--amber); border:1px solid rgba(255,176,32,0.4); }
+.level-badge.low { background:rgba(0,209,255,0.12); color:var(--cyan); border:1px solid rgba(0,209,255,0.4); }
+
+/* ===== 底部操作栏 ===== */
+.bottom-bar {
+  height:52px; min-height:52px;
+  background:var(--bg-card);
+  border-top:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center; gap:12px;
+  padding:0 20px;
+}
+.bottom-bar::before {
+  content:''; position:absolute; top:0; left:0; right:0; height:1px;
+  background: linear-gradient(90deg, transparent, var(--border-light), transparent);
+}
+.op-btn {
+  height:38px; padding:0 28px;
+  border:1px solid; font-size:13px; font-weight:500;
+  cursor:pointer; transition:all 0.15s; user-select:none;
+  display:flex; align-items:center; gap:6px;
+  letter-spacing:0.5px;
+}
+.op-btn:active { transform:scale(0.94); }
+.op-btn.arm { background:rgba(0,209,255,0.12); border-color:var(--cyan); color:var(--cyan); }
+.op-btn.arm:hover { background:rgba(0,209,255,0.22); }
+.op-btn.disarm { background:rgba(138,154,181,0.08); border-color:var(--border-light); color:var(--text-lo); }
+.op-btn.disarm:hover { background:rgba(138,154,181,0.15); }
+.op-btn.silence { background:rgba(255,176,32,0.10); border-color:var(--amber); color:var(--amber); }
+.op-btn.silence:hover { background:rgba(255,176,32,0.20); }
+.op-btn.settings { background:rgba(37,54,86,0.3); border-color:var(--border); color:var(--text-lo); }
+.op-btn.settings:hover { background:rgba(37,54,86,0.5); }
+.op-btn svg { width:14px; height:14px; }
+
+/* ===== 弹窗通用（毛玻璃深色） ===== */
+.modal-overlay {
+  position:absolute; inset:0;
+  background:rgba(6,10,20,0.8);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  display:none; align-items:center; justify-content:center; z-index:100;
+}
+.modal-overlay.show { display:flex; }
+.modal-box {
+  width:400px; background:rgba(27,42,74,0.95); border:1px solid var(--border);
+  padding:0; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);
+}
+.modal-head {
+  padding:12px 16px; border-bottom:1px solid var(--border);
+  display:flex; justify-content:space-between; align-items:center;
+}
+.modal-head h3 { font-size:14px; font-weight:500; }
+.modal-close {
+  width:24px; height:24px; border:1px solid var(--border); background:transparent;
+  color:var(--text-lo); cursor:pointer; font-size:14px;
+  display:flex; align-items:center; justify-content:center;
+  transition:all 0.15s;
+}
+.modal-close:hover { border-color:var(--red); color:var(--red); }
+.modal-body { padding:16px; max-height:380px; overflow-y:auto; }
+.modal-body::-webkit-scrollbar { width:3px; }
+.modal-body::-webkit-scrollbar-track { background:transparent; }
+.modal-body::-webkit-scrollbar-thumb { background:var(--border-light); border-radius:2px; }
+.modal-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid rgba(37,54,86,0.3); font-size:12px; }
+.modal-row:last-child { border-bottom:none; }
+.modal-label { color:var(--text-dim); }
+.modal-value { color:var(--text-hi); }
+.modal-actions { padding:12px 16px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+
+/* ===== 新增D：设置弹窗自定义样式 ===== */
+.setting-section { margin-bottom:16px; }
+.setting-section-title {
+  font-size:11px; color:var(--text-dim); letter-spacing:0.5px;
+  margin-bottom:10px; padding-bottom:6px;
+  border-bottom:1px solid rgba(37,54,86,0.3);
+}
+.setting-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:6px 0; font-size:12px;
+}
+.setting-label { color:var(--text-lo); }
+.setting-value { color:var(--cyan); font-family:'JetBrains Mono',monospace; font-size:11px; }
+
+/* 自定义 range 滑条 */
+input[type="range"] {
+  -webkit-appearance:none; appearance:none;
+  width:140px; height:4px; outline:none;
+  background:var(--border); border-radius:2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance:none; appearance:none;
+  width:14px; height:14px; border-radius:50%;
+  background:var(--cyan); cursor:pointer;
+  box-shadow:0 0 6px rgba(0,209,255,0.4);
+}
+input[type="range"]::-moz-range-thumb {
+  width:14px; height:14px; border-radius:50%; border:none;
+  background:var(--cyan); cursor:pointer;
+  box-shadow:0 0 6px rgba(0,209,255,0.4);
+}
+
+/* ===== 新增D：网络状态点 ===== */
+.net-dot {
+  display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;
+}
+.net-dot.online { background:var(--green); box-shadow:0 0 4px var(--green); }
+.net-dot.offline { background:var(--text-dim); }
+
+/* ===== 新增E：定时布防开关 ===== */
+.toggle-switch {
+  position:relative; width:40px; height:20px;
+  background:var(--border); border-radius:10px; cursor:pointer;
+  transition:background 0.25s; user-select:none;
+}
+.toggle-switch.on { background:var(--cyan); }
+.toggle-switch .toggle-knob {
+  position:absolute; top:2px; left:2px;
+  width:16px; height:16px; border-radius:50%;
+  background:#fff; transition:left 0.25s;
+}
+.toggle-switch.on .toggle-knob { left:22px; }
+.toggle-hint {
+  font-size:10px; color:var(--amber); margin-top:4px;
+  opacity:0; transition:opacity 0.3s;
+}
+.toggle-hint.show { opacity:1; }
+
+/* ===== 新增B：相册弹窗 3x2 缩略图网格 ===== */
+.album-grid {
+  display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+}
+.album-thumb {
+  aspect-ratio:16/9; background:var(--bg-card-alt);
+  border:1px solid var(--border); position:relative;
+  display:flex; align-items:center; justify-content:center;
+  overflow:hidden; transition:border-color 0.15s;
+}
+.album-thumb:hover { border-color:var(--cyan); }
+.album-thumb-label {
+  font-size:9px; color:var(--text-dim); text-align:center;
+  pointer-events:none;
+}
+.album-thumb-time {
+  position:absolute; bottom:3px; right:4px;
+  font-size:8px; color:var(--text-dim);
+  font-family:'JetBrains Mono',monospace;
+  background:rgba(0,0,0,0.5); padding:1px 4px;
+}
+.album-thumb-level { position:absolute; top:3px; left:3px; }
+
+/* ===== 新增C：告警分级配置区 ===== */
+.level-config-row {
+  display:flex; align-items:center; gap:8px; padding:6px 0;
+  font-size:12px;
+}
+.level-dot {
+  width:8px; height:8px; border-radius:50%; flex-shrink:0;
+}
+.level-dot.high { background:var(--red); }
+.level-dot.medium { background:var(--amber); }
+.level-dot.low { background:var(--cyan); }
+
+/* ===== 抓拍提示 ===== */
+.toast {
+  position:absolute; bottom:60px; left:50%; transform:translateX(-50%);
+  background:rgba(32,201,151,0.9); color:#000; padding:6px 18px;
+  font-size:12px; font-weight:500; opacity:0; pointer-events:none;
+  transition:opacity 0.3s; z-index:90;
+}
+.toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div id="canvas">
+  <!-- 顶部说明条 -->
+  <div class="info-bar">1024x600 安防网关预览 · 点击按钮体验交互</div>
+  <!-- 状态栏 -->
+  <div class="status-bar">
+    <div class="status-left">
+      <span class="dot">&#9670;</span>
+      <span>智慧安防网关 · 边缘在线</span>
+    </div>
+    <div class="status-center mono" id="clock">2026-08-22 14:32:00</div>
+    <div class="status-right">
+      <div class="sr-item"><div class="status-light on"></div><span>联网</span></div>
+      <div class="sr-item"><div class="status-light on" id="arm-light"></div><span id="arm-label">布防中</span></div>
+      <div class="sr-item mono" style="font-size:10px;color:var(--text-dim)">i.MX6ULL</div>
+    </div>
+  </div>
+  <!-- 主内容区 -->
+  <div class="main-area">
+    <!-- 左列 -->
+    <div class="left-col">
+      <!-- 摄像头预览 -->
+      <div class="cam-wrap" id="cam-wrap">
+        <div class="cam-header">
+          <div class="mode-badge">云端精判模式 · 实时预览</div>
+          <div class="cam-switcher" id="cam-switcher">
+            <div class="cam-pill active" data-cam="0" onclick="switchCam(0)">前门</div>
+            <div class="cam-pill" data-cam="1" onclick="switchCam(1)">后门</div>
+            <div class="cam-pill" data-cam="2" onclick="switchCam(2)">仓库</div>
+            <div class="cam-pill" data-cam="3" onclick="switchCam(3)">周界</div>
+          </div>
+          <div class="cam-title mono" id="cam-ch">CH01 · 640&#215;360 · 30fps</div>
+        </div>
+        <div class="grid-overlay"></div>
+        <div class="scanline"></div>
+        <div class="crosshair"><div class="h"></div><div class="v"></div></div>
+        <!-- 新增A：摄像头预览内容区 -->
+        <div class="cam-preview-area" id="cam-preview">
+          <div class="cam-preview-text" id="cam-text">前门画面</div>
+        </div>
+        <div class="capture-btn" onclick="doCapture()">&#9675; 抓拍</div>
+      </div>
+      <!-- 2x2 分区卡片 -->
+      <div class="zones-grid" id="zones">
+        <div class="zone-card" data-zone="0" onclick="showDetail(0)">
+          <div class="zone-name"><div class="zone-dot online"></div>前门</div>
+          <div class="zone-status-text" id="zs0">在线 · 正常</div>
+          <div class="zone-id mono">Z-001 · PIR+门磁</div>
+        </div>
+        <div class="zone-card" data-zone="1" onclick="showDetail(1)">
+          <div class="zone-name"><div class="zone-dot online"></div>后门</div>
+          <div class="zone-status-text" id="zs1">在线 · 正常</div>
+          <div class="zone-id mono">Z-002 · PIR+门磁</div>
+        </div>
+        <div class="zone-card" data-zone="2" onclick="showDetail(2)">
+          <div class="zone-name"><div class="zone-dot online"></div>窗户</div>
+          <div class="zone-status-text" id="zs2">在线 · 正常</div>
+          <div class="zone-id mono">Z-003 · 门窗磁</div>
+        </div>
+        <div class="zone-card" data-zone="3" onclick="showDetail(3)">
+          <div class="zone-name"><div class="zone-dot online"></div>仓库</div>
+          <div class="zone-status-text" id="zs3">在线 · 正常</div>
+          <div class="zone-id mono">Z-004 · PIR+摄像</div>
+        </div>
+      </div>
+    </div>
+    <!-- 右列 - 事件时间轴 -->
+    <div class="right-col">
+      <div class="events-header">
+        <span>事件时间轴</span>
+        <span class="count mono" id="event-count">20 条</span>
+      </div>
+      <div class="events-list" id="events-list"></div>
+    </div>
+  </div>
+  <!-- 底部操作栏 -->
+  <div class="bottom-bar">
+    <div class="op-btn arm" onclick="doArm()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      布防
+    </div>
+    <div class="op-btn disarm" onclick="doDisarm()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4" y1="4" x2="20" y2="20"/></svg>
+      撤防
+    </div>
+    <div class="op-btn silence" onclick="doSilence()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+      消警
+    </div>
+    <div class="op-btn settings" onclick="doSettings()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      设置
+    </div>
+  </div>
+  <!-- 抓拍提示 -->
+  <div class="toast" id="toast">&#10003; 抓拍已保存</div>
+
+  <!-- 弹窗1：分区详情 -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 id="modal-title">分区详情</h3>
+        <div class="modal-close" onclick="closeModal()">&#10005;</div>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-actions">
+        <div class="op-btn disarm" style="height:30px;padding:0 16px;font-size:11px" onclick="closeModal()">关闭</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新增B：相册弹窗 -->
+  <div class="modal-overlay" id="album-modal">
+    <div class="modal-box" style="width:440px">
+      <div class="modal-head">
+        <h3 id="album-title">抓拍相册</h3>
+        <div class="modal-close" onclick="closeAlbum()">&#10005;</div>
+      </div>
+      <div class="modal-body">
+        <div class="album-grid" id="album-grid"></div>
+      </div>
+      <div class="modal-actions">
+        <div class="op-btn disarm" style="height:30px;padding:0 16px;font-size:11px" onclick="closeAlbum()">关闭</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新增D/E：系统设置弹窗 -->
+  <div class="modal-overlay" id="settings-modal">
+    <div class="modal-box" style="width:420px">
+      <div class="modal-head">
+        <h3>系统设置</h3>
+        <div class="modal-close" onclick="closeSettings()">&#10005;</div>
+      </div>
+      <div class="modal-body">
+        <!-- 新增D：亮度滑条 -->
+        <div class="setting-section">
+          <div class="setting-section-title">显示设置</div>
+          <div class="setting-row">
+            <span class="setting-label">屏幕亮度</span>
+            <span class="setting-value" id="brightness-val">80%</span>
+          </div>
+          <div style="padding:4px 0">
+            <input type="range" min="0" max="100" value="80" id="brightness-slider" oninput="updateBrightness(this.value)">
+          </div>
+        </div>
+        <!-- 新增D：音量滑条 -->
+        <div class="setting-section">
+          <div class="setting-section-title">音频设置</div>
+          <div class="setting-row">
+            <span class="setting-label">告警音量</span>
+            <span class="setting-value" id="volume-val">60%</span>
+          </div>
+          <div style="padding:4px 0">
+            <input type="range" min="0" max="100" value="60" id="volume-slider" oninput="updateVolume(this.value)">
+          </div>
+        </div>
+        <!-- 新增D：网络状态 -->
+        <div class="setting-section">
+          <div class="setting-section-title">网络状态</div>
+          <div class="setting-row">
+            <span class="setting-label"><span class="net-dot online" id="net-dot"></span>以太网</span>
+            <span class="setting-value" id="net-status">在线</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">IP 地址</span>
+            <span class="setting-value mono">192.168.1.10</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">MQTT 服务器</span>
+            <span class="setting-value mono">broker.local:1883</span>
+          </div>
+        </div>
+        <!-- 新增C：告警分级配置 -->
+        <div class="setting-section">
+          <div class="setting-section-title">告警分级配置</div>
+          <div class="level-config-row">
+            <div class="level-dot high"></div>
+            <span style="color:var(--text-hi);font-size:12px">高</span>
+            <span style="color:var(--text-dim);font-size:11px;margin-left:auto">入侵检测、异常闯入</span>
+          </div>
+          <div class="level-config-row">
+            <div class="level-dot medium"></div>
+            <span style="color:var(--text-hi);font-size:12px">中</span>
+            <span style="color:var(--text-dim);font-size:11px;margin-left:auto">信号弱、设备离线</span>
+          </div>
+          <div class="level-config-row">
+            <div class="level-dot low"></div>
+            <span style="color:var(--text-hi);font-size:12px">低</span>
+            <span style="color:var(--text-dim);font-size:11px;margin-left:auto">温度偏高、存储不足</span>
+          </div>
+        </div>
+        <!-- 新增E：定时布防 -->
+        <div class="setting-section">
+          <div class="setting-section-title">定时布防</div>
+          <div class="setting-row">
+            <span class="setting-label">22:00-06:00 自动布防</span>
+            <div class="toggle-switch" id="schedule-toggle" onclick="toggleSchedule()">
+              <div class="toggle-knob"></div>
+            </div>
+          </div>
+          <div class="toggle-hint" id="schedule-hint">已启用：每日 22:00 自动布防，06:00 自动撤防</div>
+        </div>
+        <!-- 关于信息 -->
+        <div class="setting-section">
+          <div class="setting-section-title">关于</div>
+          <div class="setting-row">
+            <span class="setting-label">设备型号</span>
+            <span class="setting-value">i.MX6ULL 安防网关</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">固件版本</span>
+            <span class="setting-value mono">v2.3.1</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">内核版本</span>
+            <span class="setting-value mono">Linux 5.4.0</span>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">存储空间</span>
+            <span class="setting-value mono">14.2GB / 32GB</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <div class="op-btn disarm" style="height:30px;padding:0 16px;font-size:11px" onclick="closeSettings()">关闭</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== 状态管理 =====
+var ZONES = [
+  { name:'前门', id:'Z-001', sensor:'PIR+门磁', ip:'192.168.1.101', fw:'v2.3.1', rssi:'-42dBm' },
+  { name:'后门', id:'Z-002', sensor:'PIR+门磁', ip:'192.168.1.102', fw:'v2.3.1', rssi:'-55dBm' },
+  { name:'窗户', id:'Z-003', sensor:'门窗磁',   ip:'192.168.1.103', fw:'v2.3.0', rssi:'-38dBm' },
+  { name:'仓库', id:'Z-004', sensor:'PIR+摄像', ip:'192.168.1.104', fw:'v2.3.1', rssi:'-61dBm' }
+];
+
+var armed = false;
+var zoneStates = ['online','online','online','online'];
+
+// ===== 新增A：摄像头切换状态 =====
+var CAMS = [
+  { name:'前门', ch:'CH01', bg:'rgba(0,60,80,0.4)', label:'前门画面' },
+  { name:'后门', ch:'CH02', bg:'rgba(30,50,80,0.4)', label:'后门画面' },
+  { name:'仓库', ch:'CH03', bg:'rgba(50,40,60,0.4)', label:'仓库画面' },
+  { name:'周界', ch:'CH04', bg:'rgba(40,60,40,0.4)', label:'周界画面' }
+];
+var currentCam = 0;
+
+// ===== 新增E：定时布防状态 =====
+var scheduleArmed = false;
+
+// ===== 事件数据（含新增C级别） =====
+var eventTemplates = [
+  { type:'info',  title:'系统启动完成', loc:'主控', level:'' },
+  { type:'ok',    title:'传感器自检通过', loc:'前门', level:'low' },
+  { type:'ok',    title:'传感器自检通过', loc:'后门', level:'low' },
+  { type:'info',  title:'网络连接已建立', loc:'主控', level:'' },
+  { type:'info',  title:'云端同步就绪', loc:'主控', level:'' },
+  { type:'ok',    title:'摄像头信号正常', loc:'前门 CH01', level:'low' },
+  { type:'info',  title:'边缘粗筛引擎加载', loc:'主控', level:'' },
+  { type:'warn',  title:'仓库信号弱 < -60dBm', loc:'仓库', level:'medium' },
+  { type:'info',  title:'事件上报 12 条/分', loc:'云端', level:'' },
+  { type:'ok',    title:'固件校验通过 v2.3.1', loc:'主控', level:'' },
+  { type:'info',  title:'NTP 时间同步', loc:'主控', level:'' },
+  { type:'ok',    title:'PIR 灵敏度校准', loc:'窗户', level:'low' },
+  { type:'info',  title:'日志上传完成', loc:'云端', level:'' },
+  { type:'warn',  title:'CPU 温度 62°C', loc:'主控', level:'medium' },
+  { type:'info',  title:'MQTT 心跳正常', loc:'云端', level:'' },
+  { type:'ok',    title:'门磁状态: 已关闭', loc:'前门', level:'low' },
+  { type:'info',  title:'存储剩余 14.2GB', loc:'主控', level:'low' },
+  { type:'info',  title:'视频编码 H.264 720p', loc:'CH01', level:'' },
+  { type:'ok',    title:'门磁状态: 已关闭', loc:'后门', level:'low' },
+  { type:'info',  title:'边缘模式运行中', loc:'主控', level:'' }
+];
+
+// ===== 新增C：告警级别徽章 HTML =====
+function getLevelBadge(level) {
+  if (!level) return '';
+  var map = { high:'级别：高', medium:'级别：中', low:'级别：低' };
+  return '<span class="level-badge ' + level + '">' + (map[level] || level) + '</span>';
+}
+
+// ===== 初始化事件列表（含"查看"按钮 + 级别徽章） =====
+function initEvents() {
+  var list = document.getElementById('events-list');
+  list.innerHTML = '';
+  var now = new Date();
+  eventTemplates.forEach(function(e, i) {
+    var t = new Date(now - i * 90000);
+    var timeStr = t.toTimeString().slice(0,5);
+    var item = document.createElement('div');
+    item.className = 'event-item';
+    item.innerHTML =
+      '<div class="event-time mono">' + timeStr + '</div>' +
+      '<div class="event-dot ' + e.type + '"></div>' +
+      '<div class="event-body">' +
+        '<div class="event-title">' + e.title + '</div>' +
+        '<div class="event-loc">' + e.loc + '</div>' +
+        getLevelBadge(e.level) +
+      '</div>' +
+      '<button class="event-view-btn" onclick="openAlbum(\'' + e.title.replace(/'/g, "\\'") + '\')">查看</button>';
+    list.appendChild(item);
+  });
+  document.getElementById('event-count').textContent = eventTemplates.length + ' 条';
+}
+
+// ===== 添加事件 =====
+function addEvent(type, title, loc, level) {
+  level = level || '';
+  var list = document.getElementById('events-list');
+  var now = new Date();
+  var timeStr = now.toTimeString().slice(0,5);
+  var item = document.createElement('div');
+  item.className = 'event-item';
+  item.style.opacity = '0';
+  item.innerHTML =
+    '<div class="event-time mono">' + timeStr + '</div>' +
+    '<div class="event-dot ' + type + '"></div>' +
+    '<div class="event-body">' +
+      '<div class="event-title">' + title + '</div>' +
+      '<div class="event-loc">' + loc + '</div>' +
+      getLevelBadge(level) +
+    '</div>' +
+    '<button class="event-view-btn" onclick="openAlbum(\'' + title.replace(/'/g, "\\'") + '\')">查看</button>';
+  list.insertBefore(item, list.firstChild);
+  requestAnimationFrame(function() { item.style.transition = 'opacity 0.4s'; item.style.opacity = '1'; });
+  var count = list.children.length;
+  document.getElementById('event-count').textContent = count + ' 条';
+}
+
+// ===== 时钟 =====
+function updateClock() {
+  var now = new Date();
+  var pad = function(n) { return String(n).padStart(2, '0'); };
+  document.getElementById('clock').textContent =
+    now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' +
+    pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ===== 布防 =====
+function doArm() {
+  if (armed) return;
+  armed = true;
+  var cards = document.querySelectorAll('.zone-card');
+  cards.forEach(function(card, i) {
+    zoneStates[i] = 'armed';
+    card.className = 'zone-card armed';
+    card.querySelector('.zone-dot').className = 'zone-dot online';
+    document.getElementById('zs' + i).textContent = '布防中 · 监控中';
+  });
+  document.getElementById('arm-label').textContent = '布防中';
+  document.getElementById('arm-light').className = 'status-light on';
+  addEvent('ok', '全部分区已布防', '系统');
+}
+
+// ===== 撤防 =====
+function doDisarm() {
+  if (!armed) return;
+  armed = false;
+  var cards = document.querySelectorAll('.zone-card');
+  cards.forEach(function(card, i) {
+    zoneStates[i] = 'online';
+    card.className = 'zone-card';
+    card.querySelector('.zone-dot').className = 'zone-dot online';
+    document.getElementById('zs' + i).textContent = '在线 · 正常';
+  });
+  document.getElementById('arm-label').textContent = '已撤防';
+  document.getElementById('arm-light').className = 'status-light warn';
+  addEvent('warn', '全部分区已撤防', '系统');
+}
+
+// ===== 消警 =====
+function doSilence() {
+  var cards = document.querySelectorAll('.zone-card');
+  var hadAlarm = false;
+  cards.forEach(function(card, i) {
+    if (zoneStates[i] === 'alarm') {
+      hadAlarm = true;
+      zoneStates[i] = armed ? 'armed' : 'online';
+      card.className = zoneStates[i] === 'armed' ? 'zone-card armed' : 'zone-card';
+      card.querySelector('.zone-dot').className = 'zone-dot online';
+      document.getElementById('zs' + i).textContent = zoneStates[i] === 'armed' ? '布防中 · 监控中' : '在线 · 正常';
+    }
+  });
+  if (hadAlarm) {
+    addEvent('ok', '告警已手动消除', '系统');
+  } else {
+    addEvent('info', '当前无告警', '系统');
+  }
+}
+
+// ===== 新增D/E：系统设置弹窗 =====
+function doSettings() {
+  document.getElementById('settings-modal').classList.add('show');
+  addEvent('info', '设置面板已打开', '系统');
+}
+function closeSettings() {
+  document.getElementById('settings-modal').classList.remove('show');
+}
+
+// ===== 新增D：亮度滑条 =====
+function updateBrightness(val) {
+  document.getElementById('brightness-val').textContent = val + '%';
+}
+
+// ===== 新增D：音量滑条 =====
+function updateVolume(val) {
+  document.getElementById('volume-val').textContent = val + '%';
+}
+
+// ===== 新增E：定时布防开关 =====
+function toggleSchedule() {
+  scheduleArmed = !scheduleArmed;
+  var toggle = document.getElementById('schedule-toggle');
+  var hint = document.getElementById('schedule-hint');
+  if (scheduleArmed) {
+    toggle.classList.add('on');
+    hint.classList.add('show');
+    addEvent('info', '定时布防已启用: 22:00-06:00', '系统');
+  } else {
+    toggle.classList.remove('on');
+    hint.classList.remove('show');
+    addEvent('info', '定时布防已关闭', '系统');
+  }
+}
+
+// ===== 抓拍 =====
+function doCapture() {
+  var toast = document.getElementById('toast');
+  toast.classList.add('show');
+  addEvent('ok', '手动抓拍已保存', 'CH01');
+  setTimeout(function() { toast.classList.remove('show'); }, 1500);
+}
+
+// ===== 新增A：摄像头切换 =====
+function switchCam(idx) {
+  if (idx === currentCam) return;
+  var preview = document.getElementById('cam-preview');
+  var text = document.getElementById('cam-text');
+  var ch = document.getElementById('cam-ch');
+  // 淡出
+  preview.classList.add('fade-out');
+  setTimeout(function() {
+    currentCam = idx;
+    text.textContent = CAMS[idx].label;
+    preview.style.background = CAMS[idx].bg;
+    ch.textContent = CAMS[idx].ch + ' · 640\u00d7360 · 30fps';
+    // 切换 pill 高亮
+    var pills = document.querySelectorAll('.cam-pill');
+    pills.forEach(function(p, i) {
+      p.classList.toggle('active', i === idx);
+    });
+    // 高亮对应分区卡片
+    highlightZoneCard(idx);
+    // 淡入
+    preview.classList.remove('fade-out');
+  }, 300);
+}
+
+// ===== 新增A：高亮对应分区卡片 =====
+function highlightZoneCard(camIdx) {
+  var cards = document.querySelectorAll('.zone-card');
+  // 摄像头索引映射到分区索引：前门=0, 后门=1, 仓库=3, 周界=2(窗户)
+  var zoneMap = [0, 1, 3, 2];
+  cards.forEach(function(card) {
+    card.classList.remove('cam-selected');
+  });
+  var zoneIdx = zoneMap[camIdx];
+  if (cards[zoneIdx]) {
+    cards[zoneIdx].classList.add('cam-selected');
+  }
+}
+
+// ===== 新增B：相册弹窗 =====
+function openAlbum(eventTitle) {
+  var grid = document.getElementById('album-grid');
+  var title = document.getElementById('album-title');
+  title.textContent = '抓拍相册 · ' + eventTitle;
+  // 生成6张占位缩略图
+  var levels = ['high', 'medium', 'low', 'high', 'low', 'medium'];
+  var colors = ['rgba(255,77,79,0.15)', 'rgba(255,176,32,0.15)', 'rgba(0,209,255,0.12)',
+                'rgba(255,77,79,0.15)', 'rgba(0,209,255,0.12)', 'rgba(255,176,32,0.15)'];
+  var times = ['14:32', '14:28', '14:15', '13:58', '13:42', '13:30'];
+  var levelLabels = { high:'高', medium:'中', low:'低' };
+  var html = '';
+  for (var i = 0; i < 6; i++) {
+    html += '<div class="album-thumb" style="background:' + colors[i] + '">' +
+      '<div class="album-thumb-label">抓拍 #' + (i+1) + '</div>' +
+      '<div class="album-thumb-level"><span class="level-badge ' + levels[i] + '">' + levelLabels[levels[i]] + '</span></div>' +
+      '<div class="album-thumb-time mono">' + times[i] + '</div>' +
+    '</div>';
+  }
+  grid.innerHTML = html;
+  document.getElementById('album-modal').classList.add('show');
+}
+function closeAlbum() {
+  document.getElementById('album-modal').classList.remove('show');
+}
+
+// ===== 分区详情弹窗 =====
+function showDetail(idx) {
+  var z = ZONES[idx];
+  var state = zoneStates[idx];
+  var stateText = state === 'armed' ? '布防中' : state === 'alarm' ? '告警' : '在线';
+  var stateColor = state === 'alarm' ? 'var(--red)' : state === 'armed' ? 'var(--green)' : 'var(--cyan)';
+  document.getElementById('modal-title').textContent = z.name + ' · 分区详情';
+  document.getElementById('modal-body').innerHTML =
+    '<div class="modal-row"><span class="modal-label">分区编号</span><span class="modal-value mono">' + z.id + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">分区名称</span><span class="modal-value">' + z.name + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">当前状态</span><span class="modal-value" style="color:' + stateColor + '">' + stateText + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">传感器类型</span><span class="modal-value">' + z.sensor + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">IP 地址</span><span class="modal-value mono">' + z.ip + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">固件版本</span><span class="modal-value mono">' + z.fw + '</span></div>' +
+    '<div class="modal-row"><span class="modal-label">信号强度</span><span class="modal-value mono">' + z.rssi + '</span></div>';
+  document.getElementById('modal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('show');
+}
+
+// ===== 点击弹窗背景关闭 =====
+document.getElementById('modal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+document.getElementById('album-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeAlbum();
+});
+document.getElementById('settings-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeSettings();
+});
+
+// ===== 模拟随机告警（演示用） =====
+function simulateAlarm() {
+  if (!armed) return;
+  var idx = Math.floor(Math.random() * 4);
+  if (zoneStates[idx] !== 'alarm') {
+    zoneStates[idx] = 'alarm';
+    var card = document.querySelectorAll('.zone-card')[idx];
+    card.className = 'zone-card alarm';
+    card.querySelector('.zone-dot').className = 'zone-dot alarm';
+    document.getElementById('zs' + idx).textContent = '异常 · 已触发';
+    addEvent('error', '入侵检测触发', ZONES[idx].name, 'high');
+  }
+}
+
+// 每隔15-30秒随机触发一次告警（仅演示）
+setInterval(function() {
+  if (armed && Math.random() > 0.6) simulateAlarm();
+}, 18000);
+
+// ===== 初始化 =====
+initEvents();
+document.getElementById('cam-preview').style.background = CAMS[0].bg;
+</script>
+</body>
+</html>

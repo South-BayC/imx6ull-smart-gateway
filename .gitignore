@@ -1,0 +1,50 @@
+# ============================================================
+# .gitignore - i.MX6ULL 智能安防网关项目
+# ============================================================
+
+# --- 构建产物 ---
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.map
+
+# --- 编辑器/IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.cproject
+
+# --- 操作系统 ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- 工具/框架目录 ---
+.codegraph/
+.omo/
+.zcode/
+
+# --- LVGL 库源码 (作为普通源码直接提交) ---
+
+# --- 字体生成中间文件 ---
+core/lvgl/src/font/*.py
+core/lvgl/src/font/*.txt
+core/lvgl/src/font/*.ttf
+core/lvgl/src/font/*.otf
+
+# --- 测试文件 ---
+core/lvgl/src/test_*.c
+
+# --- 大型文件 ---
+*.pdf
+*.zip
+*.tar.gz
+
+# --- 临时文件 ---
+*.tmp
+*.log
