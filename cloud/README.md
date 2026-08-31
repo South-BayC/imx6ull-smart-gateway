@@ -9,14 +9,29 @@
 
 ## 安装（VM/主机）
 
+新 Ubuntu（Python 3.12+）pip 受 PEP 668 管控，**必须用虚拟环境**，且 `face_recognition`
+依赖的 `pkg_resources` 在 setuptools≥81 已被移除，需先钉住旧版（08-30 板测实证）：
+
 ```bash
+# ① 虚拟环境（一次性）
+python3 -m venv ~/cloud-venv
+source ~/cloud-venv/bin/activate          # 每次开新终端跑服务前都要先执行
+
+# ② 先装 setuptools<81（否则 face_recognition 报"Please install face_recognition_models"，
+#    实际是 pkg_resources 缺失，报错信息有误导性）
+pip install "setuptools<81" -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# ③ 依赖清单
 cd cloud
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# ④ 验证（应打印 FR OK；pkg_resources 弃用警告无害）
+python -c "import face_recognition; print('FR OK')"
 ```
 
 说明：
-- ultralytics 首次推理会自动下载 `yolov8n.pt`（约 6MB）。下载失败时手动下载放到
-  运行目录：https://github.com/ultralytics/assets/releases （选 yolov8n.pt）
+- `yolov8n.pt`（6.2MB）已预置在本目录并随仓库分发，**运行不依赖外网**；
+  若需更换版本，从 https://github.com/ultralytics/assets/releases 下载后覆盖同名文件
 - `face_recognition` 依赖 dlib，pip 安装时需本地编译数分钟（需 cmake/g++，
   编译机已具备）；**模型权重随 pip 包内置，安装后运行不依赖外网**
 - 若 dlib 编译失败：服务仍可运行（人员检测正常），但所有人按陌生人处理（不漏报）
