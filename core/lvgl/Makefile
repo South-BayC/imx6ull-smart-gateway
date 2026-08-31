@@ -17,8 +17,15 @@ SRCS      := $(LVGL_SRCS) $(APP_SRCS)
 
 OBJS := $(patsubst %.c,$(BUILD_LVGL_DIR)/%.o,$(SRCS))
 
+# ncnn（交叉编译产物：仓库根 third_party/ncnn-armhf，SCRFD 人脸检测运行时）
+NCNN_DIR := ../../third_party/ncnn-armhf
+
+# 精判模块（C++ 编译单元：NCNN SCRFD 人脸检测；NEON 加速颜色转换）
+DET_CPP := src/detector.cpp
+OBJS    += $(BUILD_LVGL_DIR)/$(DET_CPP:.cpp=.o)
+
 CFLAGS  := -std=gnu99 -I$(CURDIR) -I$(LVGL_DIR) -I$(LVGL_DIR)/src -O2 -Wall -Wextra -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE
-LDFLAGS := -lm -lpthread
+LDFLAGS := -lm -lpthread -lstdc++ -L$(CURDIR)/$(NCNN_DIR)/lib -lncnn
 
 all: $(TARGET)
 	@echo "LVGL gateway built: $(TARGET)  ($$(du -h $(TARGET) 2>/dev/null | cut -f1))"
@@ -37,6 +44,14 @@ $(BUILD_LVGL_DIR)/%.o: %.c $(CURDIR)/lv_conf.h
 $(BUILD_LVGL_DIR)/src/cam_feed.o: src/cam_feed.c $(CURDIR)/lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -O3 -mfpu=neon -c $< -o $@
+
+# 精判模块（C++：NCNN SCRFD 人脸检测；NEON 加速颜色转换）
+# 编译器显式指定交叉 g++（不依赖 CXX 变量解析）
+$(BUILD_LVGL_DIR)/src/detector.o: $(DET_CPP) $(CURDIR)/lv_conf.h $(NCNN_DIR)/include/ncnn/net.h
+	@mkdir -p $(dir $@)
+	arm-linux-gnueabihf-g++ -std=c++11 -I$(CURDIR) -I$(LVGL_DIR) -I$(LVGL_DIR)/src \
+	       -I$(CURDIR)/$(NCNN_DIR)/include \
+	       -O2 -Wall -mfpu=neon -DLV_CONF_INCLUDE_SIMPLE -DLV_LVGL_H_INCLUDE_SIMPLE -c $< -o $@
 
 # 模拟器（SDL，宿主机）
 SIM_TARGET := $(BUILD_LVGL_DIR)/lvgl_sim

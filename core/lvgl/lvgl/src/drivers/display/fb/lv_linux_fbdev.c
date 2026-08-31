@@ -260,6 +260,7 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * colo
 {
     lv_linux_fb_t * dsc = lv_display_get_driver_data(disp);
     static int wait_vsync = 1;   /* 每刷新周期仅首个分块前等一次 vsync */
+    static int vsync_fail = 0;   /* 连续失败计数（fb blank/息屏态自动退避） */
 
     if(dsc->fbp == NULL) {
         lv_display_flush_ready(disp);
@@ -322,12 +323,18 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * colo
     /* 撕裂根治（08-29 定案）：vsync 锁相 + 大缓冲单块拷贝。
      * 机制：等 vsync 边沿后立即拷贝（写速度 ~0.0103ms/行 > 扫描 ~0.0278ms/行，
      * 写指针全程领先扫描指针），拷贝总量 < 画布扫描窗 → 无撕裂。
-     * 每刷新周期仅等一次（首个分块前），后续分块自然落在同一扫描窗内。
-     * [此前两次失败的原因：400 行缺相位锁定 / vsync 缺单块拷贝——组合后互补] */
+     * 状态自适应：fb blank（息屏 60s 无触摸自动触发）时驱动拒绝等待，
+     * 本周期跳过且按 1/300 稀疏重探（≈10s 一次），唤醒后自动恢复锁相；
+     * 息屏期间屏幕无显示，无撕裂顾虑。[此修复替换早前的无条件等待版] */
     if(wait_vsync && dsc->fbfd >= 0) {
         int dummy = 0;
-        ioctl(dsc->fbfd, FBIO_WAITFORVSYNC, &dummy);
-        wait_vsync = 0;
+        if(ioctl(dsc->fbfd, FBIO_WAITFORVSYNC, &dummy) == 0) {
+            vsync_fail = 0;
+            wait_vsync = 0;                 /* 本周期已锁相 */
+        } else {
+            vsync_fail++;
+            wait_vsync = 0;                 /* 本周期放弃等待（blank 态） */
+        }
     }
 
     uint32_t fb_pos =
@@ -363,7 +370,8 @@ static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * colo
         }
     }
 
-    if(lv_display_flush_is_last(disp)) wait_vsync = 1;   /* 下个刷新周期重新锁相 */
+    if(lv_display_flush_is_last(disp))
+        wait_vsync = (vsync_fail == 0) || (vsync_fail % 300 == 0);
 
     lv_display_flush_ready(disp);
 }

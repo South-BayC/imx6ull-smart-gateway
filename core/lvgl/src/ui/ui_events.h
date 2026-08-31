@@ -21,6 +21,16 @@ extern "C" {
 #endif
 
 /**
+ * 云端复核开关（设置→云端复核；08-30 统一两级管线，替代旧"识别模式"二选一）
+ * 开=两级管线：本地 SCRFD 初判立即响应（检出人脸即告警）+ 云端复核定案
+ *    （人员/入侵类型 + 白名单比对；白名单命中/判定无人时自动消警；
+ *    不可达时维持/升级本地结论，不漏报）
+ * 关=纯本地：未检出人脸即 INTRUDER 告警（语义同旧"本地精判"）
+ * @return 1=开 0=关
+ */
+int ui_events_cloud_review_on(void);
+
+/**
  * 设置分区状态（真实传感器信号入口）
  * @param id  分区索引 0-3（0=前门 1=后门 2=窗户 3=仓库）
  * @param st  新状态（ZONE_ONLINE / ZONE_ARMED / ZONE_ALARM / ZONE_OFFLINE）
@@ -49,6 +59,28 @@ void ui_events_alarm_trigger_src(int id, const char *src);
  * 恢复为布防中（若已布防）或在线，并写入事件时间轴。
  */
 void ui_events_alarm_ack(int id);
+
+/**
+ * 查询单个分区是否处于告警（云端复核自动消警判断用）
+ * @param id 分区索引 0-3
+ * @return 1=该分区 ZONE_ALARM
+ */
+int ui_events_zone_is_alarm(int id);
+
+/**
+ * 云端复核自动消警（两级管线专用；区别于人工长按消警）
+ * @param id     分区索引 0-3
+ * @param reason 消警原因文案（写入时间轴，如"云端复核：已授权人员"）
+ * 仅当该分区确在告警时动作：恢复布防中+刷新卡片+隐藏告警弹窗+时间轴+toast；
+ * 声光由 dev_bridge 分级声光轮询在状态回落后自动停止。
+ */
+void ui_events_alarm_auto_clear(int id, const char *reason);
+
+/**
+ * 轻提醒气泡（非侵入提示，1.5s 自动消失；画面变动等不打扰场景用）
+ * @param text 提示文案（须为 SHSC 字库内字符）
+ */
+void ui_events_toast(const char *text);
 
 /**
  * 事件时间轴追加（任何系统事件入口）

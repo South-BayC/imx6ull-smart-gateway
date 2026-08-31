@@ -35,4 +35,6 @@ send:
 	sudo cp ./protocol/P6_accept_sump.sh /home/szh/linux/nfs/rootfs/lib/modules/4.1.15/ -f
 	sudo chmod +x /home/szh/linux/nfs/rootfs/lib/modules/4.1.15/P6_accept_sump.sh
 	sudo cp ./build/dts/*.dtb /home/szh/linux/tftp/ -f
+	sudo cp ./build/lvgl/lvgl_gateway /home/szh/linux/nfs/rootfs/usr/bin/ -f
+	sudo cp ./models/face.param ./models/face.bin /home/szh/linux/nfs/rootfs/root/ -f
 .PHONY: all core dts test protocol host clean

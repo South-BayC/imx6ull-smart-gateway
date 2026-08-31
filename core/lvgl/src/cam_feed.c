@@ -98,11 +98,12 @@ static volatile int s_stream_ok = 0;   /* STREAMON 成功且未断流（占位�
 
 /* ---- 运动检测粗判引擎（入侵判别第一级，帧差法） ----
  * 算法: RGB565 帧 → 降采样 80×50 灰度 → 与前帧逐像素差值
- *       → 差值 > DIFF_TH 的像素占比 > RATIO_TH → 计一次命中（防抖 MOTION_DEBOUNCE 次）
- * 内存: 降采样缓冲 2×8KB 静态；开销 ~0.5ms/帧 */
+ *       → 差值 > 差值阈值 的像素占比 > RATIO_TH → 计一次命中（防抖 MOTION_DEBOUNCE 次）
+ * 可配置: 对比间隔（每 N 个转换帧判定一次，08-29 需求）+ 灰度差阈值（过滤小偏差）
+ * 内存: 降采样缓冲 2×8KB 静态；开销 ~0.5ms/次 */
 #define MD_W           80
 #define MD_H           50
-#define MD_DIFF_TH     24     /* 像素灰度差阈值（0-255） */
+#define MD_DIFF_TH     24     /* 像素灰度差阈值默认值（0-255，运行时可调） */
 #define MD_RATIO_PCT   5      /* 变化像素占比阈值 %（全画面 5%） */
 #define MD_DEBOUNCE    2      /* 连续 N 次超限 → 命中 */
 
@@ -113,6 +114,9 @@ static int md_cnt = 0;
 static volatile int s_motion_en = 1;   /* 运动检测使能（默认开） */
 static volatile int s_motion_hits = 0; /* 命中计数（消费端读取清零） */
 static volatile int s_motion_ratio = MD_RATIO_PCT; /* 变化占比阈值 %（可调） */
+static volatile int s_motion_diff = MD_DIFF_TH;    /* 像素灰度差阈值（可调，过滤小偏差） */
+static volatile int s_motion_interval = 1;         /* 帧差对比间隔 N（每 N 个转换帧判定一次） */
+static int s_motion_tick = 0;                      /* 间隔计数器 */
 
 /* ---- 公开接口（cam_feed.h 声明；非 static 供 UI/桥接层调用） ---- */
 static void scale_map_init(void);   /* 前置声明：cam_feed_set_flip 需重建映射表 */
@@ -132,6 +136,25 @@ void cam_feed_set_motion_threshold(int pct)
     s_motion_ratio = pct;
 }
 int cam_feed_get_motion_threshold(void) { return s_motion_ratio; }
+
+/* 帧差对比间隔：每 N 个转换帧判定一次（1=每帧；N 越大帧间差异越大、开销越小） */
+void cam_feed_set_motion_interval(int n)
+{
+    if (n < 1) n = 1;
+    if (n > 30) n = 30;
+    s_motion_interval = n;
+    s_motion_tick = 0;
+}
+int cam_feed_get_motion_interval(void) { return s_motion_interval; }
+
+/* 像素灰度差阈值：过滤小幅亮度偏差（5~100，默认 24） */
+void cam_feed_set_motion_diff(int d)
+{
+    if (d < 5) d = 5;
+    if (d > 100) d = 100;
+    s_motion_diff = d;
+}
+int cam_feed_get_motion_diff(void) { return s_motion_diff; }
 
 /* 画面翻转（V=上下翻，H=左右翻；默认 V+H=180°，匹配排线安装方向）。
  * 需在 cam_feed_start 前调用（映射表在采集线程启动时构建）；启动后调用
@@ -168,7 +191,7 @@ static void motion_detect(const uint8_t *frame)
         for (int i = 0; i < total; i++) {
             int d = md_cur[i] - md_prev[i];
             if (d < 0) d = -d;
-            if (d > MD_DIFF_TH) diff_cnt++;
+            if (d > s_motion_diff) diff_cnt++;
         }
         if (diff_cnt * 100 > total * s_motion_ratio)
             md_cnt++;
@@ -511,7 +534,11 @@ static void *cam_thread(void *arg)
             clock_gettime(CLOCK_MONOTONIC, &t0);
             memcpy(s_src_copy, bufs[b.index].start, CAM_SRC_W * CAM_SRC_H * 2);
             yuyv_scale_to_canvas(s_src_copy, s_frame[s_write_idx]);
-            motion_detect(s_frame[s_write_idx]);   /* 帧差粗判（命中计数供桥接层消费） */
+            /* 帧差粗判：按可配置间隔判定（间隔 N=隔 N 帧对比，帧间差异随 N 增大） */
+            if (++s_motion_tick >= s_motion_interval) {
+                s_motion_tick = 0;
+                motion_detect(s_frame[s_write_idx]);   /* 命中计数供桥接层消费 */
+            }
             clock_gettime(CLOCK_MONOTONIC, &t1);
             conv_us = (t1.tv_sec - t0.tv_sec) * 1000000L
                     + (t1.tv_nsec - t0.tv_nsec) / 1000;

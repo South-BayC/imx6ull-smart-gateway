@@ -85,6 +85,21 @@ int cam_feed_get_motion_hits(void);
 void cam_feed_set_motion_threshold(int pct);
 int  cam_feed_get_motion_threshold(void);
 
+/**
+ * 帧差对比间隔（08-29 需求：可隔几帧对比）
+ * @param n 每 N 个转换帧做一次帧差判定（1=每帧，上限 30）
+ * N 越大：帧间差异越大（更易触发）且粗判开销越小
+ */
+void cam_feed_set_motion_interval(int n);
+int  cam_feed_get_motion_interval(void);
+
+/**
+ * 像素灰度差阈值（08-29 需求：过滤小偏差）
+ * @param d 灰度差超过 d 的采样点才计为变化（5~100，默认 24）
+ */
+void cam_feed_set_motion_diff(int d);
+int  cam_feed_get_motion_diff(void);
+
 #ifdef __cplusplus
 }
 #endif

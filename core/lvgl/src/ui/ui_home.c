@@ -18,6 +18,7 @@
 #include "../state_machine.h"
 #include "../dev_bridge.h"
 #include "../cam_feed.h"
+#include "../detector.h"
 #include "../storage_mgr.h"
 #include "../mqtt_hub.h"
 #include <stdio.h>
@@ -127,34 +128,10 @@ typedef struct {
     const char *level;
 } evt_t;
 
-static evt_t evt_tbl[EVT_MAX] = {
-    {"14:37", "已入设置界面",         "系统",       CLR_CYAN,   ""},        /* 设置面板已打开 */
-    {"14:37", "当前正常",             "系统",       CLR_CYAN,   ""},        /* 当前无告警 */
-    {"14:37", "全部分区已撤防",       "系统",       CLR_AMBER,  ""},
-    {"14:37", "全部分区已布防",       "系统",       CLR_GREEN,  ""},
-    {"14:36", "手动抓拍已保存",       "CH01",       CLR_GREEN,  ""},
-    {"14:10", "系统 在位",           "主控",       CLR_CYAN,   ""},        /* 系统启动完成 */
-    {"14:09", "检测正常",            "前门",       CLR_GREEN,  "low"},     /* 传感器自检通过 */
-    {"14:07", "检测正常",            "后门",       CLR_GREEN,  "low"},     /* 传感器自检通过 */
-    {"14:06", "网络在线",            "主控",       CLR_CYAN,   ""},        /* 网络连接已建立 */
-    {"14:04", "云端在线",            "主控",       CLR_CYAN,   ""},        /* 云端同步就绪 */
-    {"14:03", "画面 正常",           "前门 CH01",  CLR_GREEN,  "low"},     /* 摄像头信号正常 */
-    {"14:01", "边缘 模式",           "主控",       CLR_CYAN,   ""},        /* 边缘粗筛引擎加载 */
-    {"14:00", "仓库 中Z",            "仓库",       CLR_AMBER,  "medium"},  /* 仓库信号弱 < -60dBm */
-    {"13:58", "事件 12 条/分",       "云端",       CLR_CYAN,   ""},        /* 事件上报 12 条/分 */
-    {"13:57", "系统 v2.3.1",          "主控",       CLR_CYAN,   ""},        /* 固件校验通过 v2.3.1 */
-    {"13:55", "NTP 时间",             "主控",       CLR_CYAN,   ""},        /* NTP 时间同步 */
-    {"13:54", "PIR 检测",             "窗户",       CLR_GREEN,  "low"},     /* PIR 灵敏度校准 */
-    {"13:52", "云端 系统",            "云端",       CLR_CYAN,   ""},        /* 日志上传完成 */
-    {"13:51", "CPU 62C",              "主控",       CLR_AMBER,  "medium"},  /* CPU 温度 62°C */
-    {"13:49", "MQTT 在线",            "云端",       CLR_CYAN,   ""},        /* MQTT 心跳正常 */
-    {"13:48", "门状态 已关",          "前门",       CLR_GREEN,  "low"},     /* 门磁状态: 已关闭 */
-    {"13:46", "存量 14.2GB",          "主控",       CLR_CYAN,   "low"},     /* 存储剩余 14.2GB */
-    {"13:45", "画面 H.264",           "CH01",       CLR_CYAN,   ""},        /* 视频编码 H.264 720p */
-    {"13:43", "门状态 已关",          "后门",       CLR_GREEN,  "low"},     /* 门磁状态: 已关闭 */
-    {"13:42", "边缘模式",             "主控",       CLR_CYAN,   ""},        /* 边缘模式运行中 */
-};
-static int evt_count = EVT_MAX;
+/* 事件数据（08-29：移除演示占位行——时间轴仅显示真实发生的事件，
+ * 条目由 _add_event 运行时动态插入，上限 EVT_MAX） */
+static evt_t evt_tbl[EVT_MAX];
+static int evt_count = 0;
 
 /* ================================================================
  * 全局状态
@@ -210,12 +187,12 @@ static int       g_alarm_zone        = -1;    /* 告警分区索引 */
 static uint8_t g_cam_canvas_buf[CAM_DISP_W * CAM_DISP_H * 2];
 static lv_obj_t *g_cam_canvas = NULL;       /* canvas 对象 */
 
-/* 入侵判别模式（设计：云端精判=粗判+上传 / 本地精判=粗判+NCNN） */
-#define DETECT_MODE_CLOUD  0
-#define DETECT_MODE_LOCAL  1
-static int g_detect_mode = DETECT_MODE_CLOUD;   /* 默认云端精判 */
-static lv_obj_t *g_mode_badge_lbl = NULL;       /* 摄像头区模式徽章（联动） */
-static lv_obj_t *g_dm_btns[2] = {NULL, NULL};   /* 设置弹窗模式按钮组 */
+/* 云端复核开关（08-30 统一两级管线：本地初判立即响应 + 云端复核定案/白名单自动消警） */
+#define CLOUD_REVIEW_ON   1
+#define CLOUD_REVIEW_OFF  0
+static int g_cloud_review = CLOUD_REVIEW_ON;    /* 默认开（两级管线） */
+static lv_obj_t *g_mode_badge_lbl = NULL;       /* 摄像头区复核状态徽章（联动） */
+static lv_obj_t *g_dm_btn = NULL;               /* 设置弹窗"云端复核"开关按钮 */
 
 /* ================================================================
  * 抓拍存储（真实画面）：全图（查看弹窗）+ 缩略图（相册 3×2）
@@ -493,7 +470,7 @@ static void _on_settings(lv_event_t *e)
 
 /* ================================================================
  * 屏幕休眠/唤醒（fb0 blank）
- * 60s 无触摸 → blank(1)；任意触摸/KEY0 → 唤醒（KEY0 由 dev_bridge 处理）
+ * 10 分钟（IDLE_SLEEP_SEC=600）无触摸 → blank(1)；任意触摸/KEY0 → 唤醒（KEY0 由 dev_bridge 处理）
  * ================================================================ */
 static int g_screen_blanked = 0;   /* 屏幕是否处于 blank（休眠）状态 */
 
@@ -925,6 +902,16 @@ static void _add_event(const char *title, const char *loc,
     }
 }
 
+/* 清空事件时间轴（08-29 用户需求：仅保留真实发生的事件，可一键清除） */
+static void _on_events_clear(lv_event_t *e)
+{
+    (void)e;
+    if (g_event_list) lv_obj_clean(g_event_list);
+    evt_count = 0;
+    if (g_event_count_lbl)
+        lv_label_set_text(g_event_count_lbl, "0 条");
+}
+
 /* ================================================================
  * 定时器回调：时钟更新（1秒）— 读取板子系统时间（真实时间）
  * ================================================================ */
@@ -1177,7 +1164,7 @@ static void _build_cam_wrap(lv_obj_t *par)
         lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
         lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-        /* mode-badge：识别模式徽章（设置页切换 云端精判/本地精判 后联动） */
+        /* mode-badge：云端复核状态徽章（设置页切换 开/关 后联动） */
         lv_obj_t *badge = uiw_obj(hdr);
         if (badge) {
             lv_obj_set_size(badge, LV_SIZE_CONTENT, 26);
@@ -1189,8 +1176,8 @@ static void _build_cam_wrap(lv_obj_t *par)
             lv_obj_set_style_pad_left(badge, 8, 0);
             lv_obj_set_style_pad_right(badge, 8, 0);
             lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
-            /* 自适应宽度完整显示；label 指针保存供模式切换联动 */
-            g_mode_badge_lbl = uiw_label(badge, "云端精判模式",
+            /* 自适应宽度完整显示；label 指针保存供开关切换联动 */
+            g_mode_badge_lbl = uiw_label(badge, "云端复核模式",
                       CLR_CYAN);
         }
 
@@ -1457,6 +1444,22 @@ static void _build_right_col(lv_obj_t *par)
             lv_obj_set_style_pad_top(g_event_count_lbl, 2, 0);
             lv_obj_set_style_pad_bottom(g_event_count_lbl, 2, 0);
         }
+
+        /* 清空按钮（08-29：清空事件时间轴） */
+        lv_obj_t *evt_clr_btn = lv_button_create(hdr);
+        if (evt_clr_btn) {
+            lv_obj_set_size(evt_clr_btn, LV_SIZE_CONTENT, 26);
+            lv_obj_set_style_bg_opa(evt_clr_btn, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_color(evt_clr_btn, lv_color_hex(CLR_BORDER), 0);
+            lv_obj_set_style_border_width(evt_clr_btn, 1, 0);
+            lv_obj_set_style_radius(evt_clr_btn, 0, 0);
+            lv_obj_set_style_pad_left(evt_clr_btn, 10, 0);
+            lv_obj_set_style_pad_right(evt_clr_btn, 10, 0);
+            lv_obj_clear_flag(evt_clr_btn, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *cl = uiw_label(evt_clr_btn, "清空", CLR_TEXT_LO);
+            if (cl) lv_obj_center(cl);
+            lv_obj_add_event_cb(evt_clr_btn, _on_events_clear, LV_EVENT_CLICKED, NULL);
+        }
     }
 
     /* events-list（可滚动，固定高度 = 主区512 - 32(header) = 480） */
@@ -1595,28 +1598,91 @@ static void _on_volume_cb(lv_event_t *e)
     }
 }
 
-/* ---- 识别模式（云端精判=粗判+上传 / 本地精判=粗判+NCNN，设置页切换联动徽章） ---- */
-static void _dm_refresh(void);   /* 前向声明：定义于下方 */
+/* ---- 云端复核开关（开=两级管线：本地初判立即响应+云端复核定案；关=纯本地，联动徽章） ---- */
+static void _review_refresh(void);   /* 前向声明：定义于下方 */
 
-static void _on_dm_sel(lv_event_t *e)
+static void _on_review_toggle(lv_event_t *e)
 {
-    g_detect_mode = (int)(intptr_t)lv_event_get_user_data(e);
-    _dm_refresh();
+    (void)e;
+    g_cloud_review = (g_cloud_review == CLOUD_REVIEW_ON) ? CLOUD_REVIEW_OFF : CLOUD_REVIEW_ON;
+    _review_refresh();
 }
 
-static void _dm_refresh(void)
+static void _review_refresh(void)
 {
-    for (int i = 0; i < 2; i++) {
-        if (!g_dm_btns[i]) continue;
-        int active = (i == g_detect_mode);
-        lv_obj_set_style_bg_opa(g_dm_btns[i], active ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-        lv_obj_t *l = lv_obj_get_child(g_dm_btns[i], 0);
-        if (l) lv_obj_set_style_text_color(l, active ? lv_color_hex(0xFFFFFF) : lv_color_hex(CLR_CYAN), 0);
+    if (g_dm_btn) {
+        int on = (g_cloud_review == CLOUD_REVIEW_ON);
+        lv_obj_t *l = lv_obj_get_child(g_dm_btn, 0);
+        lv_obj_set_style_bg_opa(g_dm_btn, on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        if (l) {
+            lv_obj_set_style_text_color(l, on ? lv_color_hex(0xFFFFFF) : lv_color_hex(CLR_CYAN), 0);
+            lv_label_set_text(l, on ? "云端复核：开" : "云端复核：关");
+        }
     }
     /* 摄像头区 mode-badge 联动 */
     if (g_mode_badge_lbl)
         lv_label_set_text(g_mode_badge_lbl,
-                          g_detect_mode == DETECT_MODE_LOCAL ? "本地精判模式" : "云端精判模式");
+                          g_cloud_review == CLOUD_REVIEW_ON ? "云端复核模式" : "纯本地模式");
+}
+
+/* ---- 检测设置（运动粗判参数：帧差间隔 + 灰度差阈值，08-29） ---- */
+static lv_obj_t *g_itv_lbl  = NULL;   /* 帧差间隔数值显示 */
+static lv_obj_t *g_diff_lbl = NULL;   /* 灰度差阈值数值显示 */
+
+static void _motion_param_refresh(void)
+{
+    char b[16];
+    if (g_itv_lbl) {
+        snprintf(b, sizeof(b), "%d 帧", cam_feed_get_motion_interval());
+        lv_label_set_text(g_itv_lbl, b);
+    }
+    if (g_diff_lbl) {
+        snprintf(b, sizeof(b), "%d", cam_feed_get_motion_diff());
+        lv_label_set_text(g_diff_lbl, b);
+    }
+}
+
+static void _on_itv_plus(lv_event_t *e)
+{
+    (void)e;
+    cam_feed_set_motion_interval(cam_feed_get_motion_interval() + 1);
+    _motion_param_refresh();
+}
+
+static void _on_itv_minus(lv_event_t *e)
+{
+    (void)e;
+    cam_feed_set_motion_interval(cam_feed_get_motion_interval() - 1);
+    _motion_param_refresh();
+}
+
+static void _on_diff_plus(lv_event_t *e)
+{
+    (void)e;
+    cam_feed_set_motion_diff(cam_feed_get_motion_diff() + 5);
+    _motion_param_refresh();
+}
+
+static void _on_diff_minus(lv_event_t *e)
+{
+    (void)e;
+    cam_feed_set_motion_diff(cam_feed_get_motion_diff() - 5);
+    _motion_param_refresh();
+}
+
+/* 步进按钮（−/+）助手 */
+static lv_obj_t *_step_btn(lv_obj_t *par, const char *txt, lv_event_cb_t cb)
+{
+    lv_obj_t *b = lv_button_create(par);
+    if (!b) return NULL;
+    lv_obj_set_size(b, 44, 30);
+    lv_obj_set_style_radius(b, 0, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(CLR_BORDER), 0);
+    lv_obj_t *l = uiw_label(b, txt, CLR_CYAN);
+    if (l) lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, NULL);
+    return b;
 }
 
 /* ---- 预警设置（四位置 × 触发源 × 数据通道 × 阈值，写入 dev_bridge 实时生效） ---- */
@@ -1975,6 +2041,55 @@ static void _build_settings_modal(void)
         }
     }
 
+    /* --- 检测设置（运动粗判参数，08-29：帧差间隔可设 + 灰度差阈值可设） --- */
+    uiw_label(body, "检测设置", CLR_TEXT_DIM);
+    {
+        lv_obj_t *row = uiw_obj(body);
+        if (row) {
+            lv_obj_set_size(row, 368, LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_top(row, 6, 0);
+            uiw_label(row, "帧差间隔", CLR_TEXT_LO);
+            g_itv_lbl = uiw_label_font(row, "", CLR_CYAN, &lv_font_SHSC_16);
+        }
+        lv_obj_t *btns = uiw_obj(body);
+        if (btns) {
+            lv_obj_set_size(btns, 368, LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(btns, LV_FLEX_ALIGN_END,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_gap(btns, 10, 0);
+            lv_obj_set_style_pad_bottom(btns, 6, 0);
+            _step_btn(btns, "-", _on_itv_minus);
+            _step_btn(btns, "+", _on_itv_plus);
+        }
+    }
+    {
+        lv_obj_t *row = uiw_obj(body);
+        if (row) {
+            lv_obj_set_size(row, 368, LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            uiw_label(row, "灰度差阈值", CLR_TEXT_LO);
+            g_diff_lbl = uiw_label_font(row, "", CLR_CYAN, &lv_font_SHSC_16);
+        }
+        lv_obj_t *btns = uiw_obj(body);
+        if (btns) {
+            lv_obj_set_size(btns, 368, LV_SIZE_CONTENT);
+            lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(btns, LV_FLEX_ALIGN_END,
+                                  LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            lv_obj_set_style_pad_gap(btns, 10, 0);
+            lv_obj_set_style_pad_bottom(btns, 10, 0);
+            _step_btn(btns, "-", _on_diff_minus);
+            _step_btn(btns, "+", _on_diff_plus);
+        }
+    }
+    _motion_param_refresh();
+
     /* --- 网络状态 --- */
     uiw_label(body, "网络状态", CLR_TEXT_DIM);
     {
@@ -2022,7 +2137,7 @@ static void _build_settings_modal(void)
         }
     }
 
-    /* --- 识别设置（双模式选择：云端精判=粗判+上传 / 本地精判=粗判+NCNN） --- */
+    /* --- 识别设置（云端复核开关：开=两级管线 本地初判+云端复核定案；关=纯本地） --- */
     uiw_label(body, "识别设置", CLR_TEXT_DIM);
     {
         lv_obj_t *dm_row = uiw_obj(body);
@@ -2033,11 +2148,9 @@ static void _build_settings_modal(void)
                                   LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
             lv_obj_set_style_pad_gap(dm_row, 8, 0);
             lv_obj_set_style_pad_bottom(dm_row, 4, 0);
-            uiw_label(dm_row, "MODE", CLR_TEXT_DIM);
-            const char *dm_names[2] = { "云端精判", "本地精判" };
-            for (int i = 0; i < 2; i++) {
-                lv_obj_t *b = lv_button_create(dm_row);
-                if (!b) continue;
+            uiw_label(dm_row, "REVIEW", CLR_TEXT_DIM);
+            lv_obj_t *b = lv_button_create(dm_row);
+            if (b) {
                 lv_obj_set_size(b, LV_SIZE_CONTENT, 28);
                 lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);
                 lv_obj_set_style_border_color(b, lv_color_hex(CLR_BORDER), 0);
@@ -2046,14 +2159,13 @@ static void _build_settings_modal(void)
                 lv_obj_set_style_pad_left(b, 10, 0);
                 lv_obj_set_style_pad_right(b, 10, 0);
                 lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-                lv_obj_t *l = uiw_label(b, dm_names[i], CLR_CYAN);
+                lv_obj_t *l = uiw_label(b, "云端复核：开", CLR_CYAN);
                 if (l) lv_obj_center(l);
-                lv_obj_add_event_cb(b, _on_dm_sel, LV_EVENT_CLICKED,
-                                   (void *)(intptr_t)i);
-                g_dm_btns[i] = b;
+                lv_obj_add_event_cb(b, _on_review_toggle, LV_EVENT_CLICKED, NULL);
+                g_dm_btn = b;
             }
         }
-        _dm_refresh();   /* 初始高亮 + 徽章联动 */
+        _review_refresh();   /* 初始文案/高亮 + 徽章联动 */
     }
 
     /* --- 预警设置（四位置 × 触发源 × 数据通道 × 阈值） --- */
@@ -2404,6 +2516,9 @@ static void _on_event_view(lv_event_t *e)
 /* 抓拍：拷当前摄像头帧 → 全图 + 缩略图降采样 + 元数据 → TF 持久化 → 相册重绘
  * zone_idx 用于 TF 文件名编码（重启恢复时还原区域名） */
 static void _rebuild_album_grid(void);
+static void _canvas_draw_intrusion_box(uint8_t *buf, int bw, int bh,
+                                       float fx, float fy, float fw, float fh,
+                                       uint16_t color);   /* 前置声明（定义于帧刷新区） */
 static void snapshot_capture_idx(int zone_idx, const char *zone, const char *level)
 {
     /* 1. 环形插入到槽位 0（最新在前），超出 SNAP_MAX 覆盖最旧 */
@@ -2411,9 +2526,18 @@ static void snapshot_capture_idx(int zone_idx, const char *zone, const char *lev
     for (int i = g_snap_count - 1; i > 0; i--)
         g_snaps[i] = g_snaps[i - 1];
 
-    /* 2. 拷贝当前摄像头帧（未工作则填黑，保留元数据可追溯） */
-    if (cam_feed_copy_frame((uint8_t *)g_snaps[0].pix) != 0)
+    /* 2. 拷贝当前摄像头帧（未工作则填黑，保留元数据可追溯）；
+     *    成功则叠加精判检出框（3s 保持窗；告警/手动抓拍均带框，08-29） */
+    if (cam_feed_copy_frame((uint8_t *)g_snaps[0].pix) == 0) {
+        detector_box_t boxes[8];
+        int nb = detector_get_boxes(boxes, 8);
+        for (int i = 0; i < nb; i++)
+            _canvas_draw_intrusion_box((uint8_t *)g_snaps[0].pix, SNAP_W, SNAP_H,
+                                       boxes[i].x, boxes[i].y,
+                                       boxes[i].w, boxes[i].h, 0xFB29);
+    } else {
         memset(g_snaps[0].pix, 0, sizeof(g_snaps[0].pix));
+    }
 
     /* 3. 缩略图降采样（最近邻：630×340 → 240×135） */
     for (int ty = 0; ty < THUMB_H; ty++) {
@@ -2645,11 +2769,13 @@ static void _refresh_test_modal(void)
     dev_bridge_get_diag(&d);
 
     char buf[64];
-    /* 行 0: LED / KEY / MOTION（运动粗判使能状态） */
-    snprintf(buf, sizeof(buf), "LED:%s KEY:%s MOT:%s",
+    /* 行 0: LED / KEY / MOTION（运动粗判使能 + 间隔/差值参数） */
+    snprintf(buf, sizeof(buf), "LED:%s KEY:%s MOT:%s I%d D%d",
              d.led_ok ? (d.led_on ? "ON " : "OFF") : "ERR",
              d.key_ok ? (d.key_pressed ? "DN " : "UP ") : "ERR",
-             cam_feed_get_motion_en() ? "ON " : "OFF");
+             cam_feed_get_motion_en() ? "ON " : "OFF",
+             cam_feed_get_motion_interval(),
+             cam_feed_get_motion_diff());
     if (g_test_lbls[0]) lv_label_set_text(g_test_lbls[0], buf);
 
     /* 行 1: BEEP / PWM（显示 ON/OFF + 频率，设备不在显示 ERR） */
@@ -3136,6 +3262,11 @@ void ui_home_create(lv_obj_t *parent)
     /* 触摸唤醒：任意触摸重置空闲计时并解除 blank */
     lv_obj_add_event_cb(parent, _on_screen_touch, LV_EVENT_PRESSED, NULL);
 
+    /* 启动自愈：强制解除 fb blank（08-30 板测定位——App 前板子停在登录提示符
+     * 超过内核空闲阈值时，fbcon 会 blank 掉 fb；App 启动若不 unblank，
+     * 渲染/刷写照常但 LCDIF 已停扫描 → 黑屏且背光亮、vsync 等待超时） */
+    _screen_set_blank(0);
+
     /* 6. 创建定时器 */
     g_timer_clock = lv_timer_create(_timer_clock_cb, 1000, NULL);
     g_timer_anim  = lv_timer_create(_timer_anim_cb, 50, NULL);
@@ -3148,14 +3279,49 @@ void ui_home_create(lv_obj_t *parent)
     }
 }
 
-/* 摄像头帧刷新：拷贝最新完成帧（双缓冲发布）后局部 invalidate
+/* 入侵框描画（RGB565 画布缓冲，2px 红框；坐标=画布 630×340 空间） */
+static void _canvas_draw_intrusion_box(uint8_t *buf, int bw, int bh,
+                                       float fx, float fy, float fw, float fh,
+                                       uint16_t color)
+{
+    int x0 = (int)fx, y0 = (int)fy;
+    int x1 = x0 + (int)fw, y1 = y0 + (int)fh;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > bw - 1) x1 = bw - 1;
+    if (y1 > bh - 1) y1 = bh - 1;
+    if (x1 - x0 < 4 || y1 - y0 < 4) return;   /* 过小框不画 */
+    uint16_t *p = (uint16_t *)buf;
+    for (int t = 0; t < 2; t++) {             /* 上/下边（2px 厚） */
+        for (int x = x0; x <= x1; x++) {
+            p[(y0 + t) * bw + x] = color;
+            p[(y1 - t) * bw + x] = color;
+        }
+    }
+    for (int t = 0; t < 2; t++) {             /* 左/右边 */
+        for (int y = y0; y <= y1; y++) {
+            p[y * bw + x0 + t] = color;
+            p[y * bw + x1 - t] = color;
+        }
+    }
+}
+
+/* 摄像头帧刷新：拷贝最新完成帧（双缓冲发布）+ 叠加入侵框后局部 invalidate
  * （v9 canvas 是普通对象，用 lv_obj_invalidate）。
  * 附：有画面隐藏占位文字/网格线，断流自动恢复（需求 08-29） */
 static void _cam_refresh_cb(lv_timer_t *timer)
 {
     (void)timer;
-    if (g_cam_canvas && cam_feed_blit_if_ready(g_cam_canvas_buf))
+    if (g_cam_canvas && cam_feed_blit_if_ready(g_cam_canvas_buf)) {
+        /* 入侵框叠加（精判检出框，3s 保持窗；随帧重描，下一帧 blit 前重画） */
+        detector_box_t boxes[8];
+        int nb = detector_get_boxes(boxes, 8);
+        for (int i = 0; i < nb; i++)
+            _canvas_draw_intrusion_box(g_cam_canvas_buf, CAM_DISP_W, CAM_DISP_H,
+                                       boxes[i].x, boxes[i].y,
+                                       boxes[i].w, boxes[i].h, 0xFB29);
         lv_obj_invalidate(g_cam_canvas);
+    }
 
     if (g_cam_grid_cnt > 0 || g_cam_text_lbl) {
         int hide = cam_feed_stream_ok();
@@ -3232,6 +3398,35 @@ void ui_events_alarm_ack(int id)
     g_zone_states[id] = ZONE_ARMED;
     _update_zone_visual(id);
     _add_event("报警已消", zone_info[id].name, CLR_GREEN, "");
+}
+
+int ui_events_zone_is_alarm(int id)
+{
+    if (id < 0 || id >= ZONE_COUNT) return 0;
+    return g_zone_states[id] == ZONE_ALARM;
+}
+
+void ui_events_alarm_auto_clear(int id, const char *reason)
+{
+    if (id < 0 || id >= ZONE_COUNT) return;
+    if (g_zone_states[id] != ZONE_ALARM) return;   /* 不在告警则无动作（幂等） */
+
+    ack_alarm(id);
+    /* 告警必产生于布防状态，消除后回到布防中 */
+    g_zone_states[id] = ZONE_ARMED;
+    _update_zone_visual(id);
+    char t[64];
+    snprintf(t, sizeof(t), "告警解除：%s", reason && reason[0] ? reason : "云端复核");
+    _add_event(t, zone_info[id].name, CLR_GREEN, "");
+    _show_toast("云端复核消警");
+    /* 告警弹窗隐藏（等价人工长按消警的关窗动作；声光由 dev_bridge 轮询自动停） */
+    if (g_alarm_popup)
+        lv_obj_add_flag(g_alarm_popup, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_events_toast(const char *text)
+{
+    _show_toast(text ? text : "");
 }
 
 void ui_events_log(const char *title, const char *loc, const char *level)
@@ -3322,6 +3517,12 @@ int ui_events_zone_alarm_level(void)
         if (g_zone_states[i] == ZONE_ALARM && zone_lvl[i] > max_lvl)
             max_lvl = zone_lvl[i];
     return max_lvl;
+}
+
+/* 云端复核开关（设置-云端复核；dev_bridge/detector 据此定案：两级管线或纯本地） */
+int ui_events_cloud_review_on(void)
+{
+    return g_cloud_review == CLOUD_REVIEW_ON;
 }
 
 void ui_events_user_activity(void)

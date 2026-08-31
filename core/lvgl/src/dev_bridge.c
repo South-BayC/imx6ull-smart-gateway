@@ -10,6 +10,7 @@
  */
 #include "dev_bridge.h"
 #include "cam_feed.h"
+#include "detector.h"
 #include "ui/ui_events.h"
 #include "lvgl/lvgl.h"
 
@@ -165,6 +166,17 @@ static int g_pwm_freq_cur = PWM_DEFAULT_FREQ;  /* 当前 PWM 频率（测试面�
 static time_t g_zone_last_trigger[4] = {0};    /* 各位置上次触发时间（冷却用） */
 static int g_beep_muted = 0;  /* 静音挂起（告警弹窗静音按钮；消警自动解除） */
 static int g_snd_phase = 0;   /* 分级声光节奏相位（200ms/拍） */
+static int g_pre_result = DET_RESULT_NONE;  /* 两级管线：当前事件初步结论（FINAL 定案参考） */
+
+/* 云端入侵类型键 → 时间轴用词（server.py 归一：person/animal/object） */
+static const char *det_type_word(const char *key)
+{
+    if (!key || !key[0]) return "";
+    if (!strcmp(key, "person")) return "人员";
+    if (!strcmp(key, "animal")) return "动物";
+    if (!strcmp(key, "object")) return "物体";
+    return "";
+}
 
 /* ================================================================
  * KEY0 设备探测：遍历 /dev/input/eventX，按名字匹配 gpio-keys
@@ -404,16 +416,91 @@ static void bridge_timer_cb(lv_timer_t *t)
         ui_events_alarm_trigger_src(i, "SENSOR");
     }
 
-    /* --- 运动粗判命中（当前预览通道对应分区，布防中+冷却，MOTION 触发） ---
-     * 单摄分时切换语义：运动发生在当前预览通道，告警归属其对应分区；
-     * 精判路径按识别模式（云端上传/本地 NCNN）后续挂接，此处先触发告警 */
+    /* --- 运动粗判命中（当前预览通道对应分区，布防中+冷却） ---
+     * 单摄分时切换语义：运动发生在当前预览通道，告警归属其对应分区。
+     * 统一入精判管线（08-30 定案）：detector 两段式（本地 SCRFD 初判 →
+     * 云端复核定案），结论经下方轮询分发 */
     int mh = cam_feed_get_motion_hits();
     if (mh > 0) {
         int z = ui_events_current_cam_zone();
         if (z >= 0 && ui_events_zone_is_armed(z)
             && now - g_zone_last_trigger[z] >= g_cfg.cooldown_sec) {
             g_zone_last_trigger[z] = now;
-            ui_events_alarm_trigger_src(z, "MOTION");
+            detector_submit(z);
+        }
+    }
+
+    /* --- 精判结论轮询（统一两级管线，08-30 定案；线程 4 异步产出 200ms 内下发） ---
+     * 复核关（纯本地）：worker 仅发 INITIAL——检出人脸→STRANGER / 未检出→INTRUDER（不漏报）
+     * 复核开（两级）：
+     *   INITIAL: 检出人脸→立即 STRANGER 告警；未检出→"画面变动"轻提醒（等云端定论）
+     *   FINAL:   白名单命中→在告警则自动消警；陌生人→不在告警则升级 STRANGER；
+     *            非人员（动物/物体/无人）→在告警则自动消警（本地误报），否则仅时间轴；
+     *            不可达→初步=未检出则升级 INTRUDER（不漏报），已告警则维持本地结论
+     * 自动消警只作用于结论分区（SENSOR 触发的其他分区告警不受影响） */
+    {
+        int rz = -1, rr = DET_RESULT_NONE, rst = DET_STAGE_INITIAL;
+        char name[32];
+        int take = detector_poll_result(&rz, &rr, &rst, name, sizeof(name)) && rz >= 0;
+
+        /* 门槛：初步结论仅布防中处理；最终结论在布防中/告警中都处理——
+         * 初判告警后分区已转 ZONE_ALARM（非 ARMED），若按布防门槛拦截，
+         * 云端白名单/无人结论永远到不了自动消警逻辑（08-30 板测定位）；
+         * 撤防（OFFLINE）后两种结论都丢弃 */
+        if (take && rst == DET_STAGE_INITIAL && !ui_events_zone_is_armed(rz))
+            take = 0;
+        if (take && rst == DET_STAGE_FINAL
+            && !ui_events_zone_is_armed(rz) && !ui_events_zone_is_alarm(rz))
+            take = 0;
+
+        if (take) {
+            if (rst == DET_STAGE_INITIAL) {
+                g_pre_result = rr;   /* 暂存初步结论（FINAL 定案时参考） */
+                if (rr == DET_RESULT_FACE_UNKNOWN) {
+                    ui_events_alarm_trigger_src(rz, "STRANGER");   /* 立即告警 */
+                } else if (rr == DET_RESULT_NO_FACE) {
+                    if (ui_events_cloud_review_on()) {
+                        /* 轻提醒不打扰：未检出人脸（可能是光影，也可能人背对镜头），等云端定论 */
+                        ui_events_toast("画面变动");
+                        ui_events_log("画面变动（未检出人员）", "本地初判", "low");
+                    } else {
+                        ui_events_alarm_trigger_src(rz, "INTRUDER");
+                    }
+                }
+            } else {   /* DET_STAGE_FINAL：云端复核定案 */
+                const char *tw = det_type_word(name);
+                switch (rr) {
+                case DET_RESULT_FACE_KNOWN: {   /* 白名单命中：误告警自动撤销 */
+                    if (ui_events_zone_is_alarm(rz))
+                        ui_events_alarm_auto_clear(rz, "云端复核：已授权人员");
+                    else
+                        ui_events_log("云端复核：已授权人员", "云端复核", "low");
+                    break;
+                }
+                case DET_RESULT_FACE_UNKNOWN: { /* 云端陌生人：不在告警则升级（如背身人形） */
+                    if (!ui_events_zone_is_alarm(rz))
+                        ui_events_alarm_trigger_src(rz, "STRANGER");
+                    break;
+                }
+                case DET_RESULT_OTHER: {        /* 云端判定非人员：本地误报则撤销 */
+                    char t[64];
+                    if (tw[0])
+                        snprintf(t, sizeof(t), "云端复核：判定为%s活动", tw);
+                    else
+                        snprintf(t, sizeof(t), "云端复核：判定无人员");
+                    if (ui_events_zone_is_alarm(rz))
+                        ui_events_alarm_auto_clear(rz, t);
+                    else
+                        ui_events_log(t, "云端复核", "low");
+                    break;
+                }
+                default: {                      /* 云端不可达：维持/升级本地结论（fail-safe） */
+                    if (g_pre_result == DET_RESULT_NO_FACE && !ui_events_zone_is_alarm(rz))
+                        ui_events_alarm_trigger_src(rz, "INTRUDER");
+                    break;
+                }
+                }
+            }
         }
     }
 
@@ -506,6 +593,7 @@ void dev_bridge_start(void)
 
     /* LVGL 主线程消费定时器（200ms） */
     lv_timer_create(bridge_timer_cb, 200, NULL);
+    detector_init();
     printf("[BRIDGE] device bridge started\n");
 }
 
