@@ -1,19 +1,14 @@
-obj-m += key_input.o
+﻿obj-m += key_input.o
 
 KDIR := /home/szh/linux/kernel/linux-imx-rel_imx_4.1.15_2.1.0_ga_southbay
+BUILD_DIR ?= $(CURDIR)/../../build
 
 all:
 	make -C $(KDIR) M=$(CURDIR) ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
 	mkdir -p $(BUILD_DIR)/module
 	cp key_input.ko $(BUILD_DIR)/module/
 
-# 应用层测试程序 → build/test/
-test:
-	mkdir -p $(BUILD_DIR)/test
-	arm-linux-gnueabihf-gcc -o $(BUILD_DIR)/test/key_input_test test/key_input_test.c
-	cp test/P6_accept.sh $(BUILD_DIR)/test/
-
 clean:
 	make -C $(KDIR) M=$(CURDIR) ARCH=arm clean
 
-.PHONY: all test clean
+.PHONY: all clean

@@ -431,6 +431,14 @@ void detector_init(void)
         pthread_detach(tid);
 }
 
+int detector_model_ready(void)
+{
+    /* 开机预加载 SCRFD 模型（幂等：s_ncnn_ok 已就绪则直接返回 0）。
+     * 避免"布防时识别尚未开启"——首次真正检测前就完成加载，
+     * 让启动流程能在时间轴准确上报"本地人脸识别就绪/未就绪（降级）"。 */
+    return ncnn_load_once();
+}
+
 void detector_set_verifier(detector_verifier_fn fn)
 {
     s_verifier = fn;

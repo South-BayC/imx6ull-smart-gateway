@@ -1,13 +1,18 @@
 # imx6ull-drivers — 边缘智能安防网关 + 全外设驱动工程
 
+> **阅读导航**：本 README 是快速总览（架构概览 + 命令速查）。
+> **完整项目文档**（架构设计 / 各功能模块学习 / 现有功能使用介绍与命令）见
+> [`D:\Desktop\项目\imx6ull_双项目设计\项目文档.md`](../项目/imx6ull_双项目设计/项目文档.md)
+> （外部文档目录，与源码互补：README 讲"怎么用"，项目文档讲"为什么与怎么学"）。
+
 基于正点原子 I.MX6ULL ALPHA（EMMC 版）+ 7 寸 1024x600 触摸屏的嵌入式 Linux 综合项目，包含两个子项目：
 
 - **项目 A · 边缘智能安防网关**（`core/lvgl/` 应用 + `cloud/` 云端服务）：LVGL 中文触摸界面，帧差粗判 + 本地人脸精判 + 云端复核（人员/类型判定 + 白名单比对）的两级入侵检测管线，告警分级声光、抓拍存证、时间轴、MQTT 上报。
-- **项目 B · 全外设驱动工程**（`core/` 各驱动模块 + `protocol/`）：LED/按键中断/多通道事件采集（kfifo+tracepoint）/PWM 蜂鸣/I2C 光感/SPI 六轴/input 按键/GT9147 触摸，附 SUMP 逻辑分析仪工具链与全量自测。
+- **项目 B · 全外设驱动工程**（`core/` 各驱动模块）：LED/按键中断/多通道事件采集（kfifo+tracepoint）/PWM 蜂鸣/I2C 光感/SPI 六轴/input 按键/GT9147 触摸。
 
 | 项 | 内容 |
 |---|---|
-| 硬件 | i.MX6ULL（单核 Cortex-A7 792MHz）· 7 寸 RGB屏（mxsfb）· GT9147 触摸 · OV5640 CSI 摄像头 · TF 卡 · 以太网 |
+| 硬件 | i.MX6ULL（单核 Cortex-A7 528MHz）· 7 寸 RGB屏（mxsfb）· GT9147 触摸 · OV5640 CSI 摄像头 · TF 卡 · 以太网 |
 | 系统 | Linux 4.1.15（Buildroot rootfs，NFS 开发模式） |
 | 工具链 | arm-linux-gnueabihf-（4.9.4），ncnn 交叉编译 third_party/ncnn-armhf |
 | 开发机 | Ubuntu VM（192.168.3.26，NFS rootfs + TFTP + 云端服务同机） |
@@ -18,10 +23,10 @@
 
 ```
 imx6ull-drivers/
-├── Makefile                     # 顶层编译调度（all/core/dts/test/protocol/send/clean）
+├── Makefile                     # 顶层编译调度（all/core/dts/lvgl/send/clean）
 ├── README.md                    # 本文件（总说明 + 使用文档）
 │
-├── core/                        # ── 项目 B：内核驱动模块（每模块含源码/UAPI/Makefile/dts/测试）──
+├── core/                        # ── 项目 B：内核驱动模块（每模块含源码/UAPI/Makefile/dts）──
 │   ├── led/                     #   [P1] LED 字符设备（miscdevice+gpiod，/dev/led）
 │   ├── key_event/               #   [P2] 按键中断驱动（阻塞/非阻塞/poll 三种读模式）
 │   ├── gpio_event_capture/      #   [P3] 多通道事件采集（kfifo+时间戳+统计+tracepoint，ABI v2）
@@ -68,11 +73,14 @@ imx6ull-drivers/
 │   └── face.bin
 │
 ├── dts/                         # 设备树（imx6ull-southbay-emmc.dts：CSI/74HC595/触摸/网口拓扑）
-├── protocol/                    # [P6-2] SUMP 逻辑分析仪工具链（edt_capture 后端 + TCP:9527 服务器）
 ├── benchmark/                   # 基准方法学（结果表待实测回填）
-├── docs/                        # 设计文档（驱动架构决策/SUMP 设计/内核补丁档案/LVGL 网关设计书）
+├── docs/                        # 设计文档（驱动架构决策/内核补丁档案/LVGL 网关设计书）
 ├── third_party/                 # ncnn 源码 + ncnn-armhf 交叉编译产物 + ncnn-assets 模型等
-└── build/                       # 编译产物（git 忽略）：module/ test/ protocol/ dts/ lvgl/
+└── build/                       # 编译输出（git 忽略）：结果与过程文件分开
+    ├── module/                  #   结果：8 个驱动 .ko
+    ├── dts/                     #   结果：设备树 .dtb
+    ├── lvgl/                    #   结果：lvgl_gateway 应用（可执行）
+    └── cache/                   #   过程文件（.o/.mod.*/.*.cmd/.tmp_versions/Module.symvers/modules.order/.dts.tmp），按模块分子目录
 ```
 
 ---
@@ -134,14 +142,14 @@ arm-linux-gnueabihf-          （4.9.4，含 g++；ncnn 依赖）
 ### 3.2 一键构建
 
 ```bash
-make              # 全编：core 驱动 + dts + 测试程序 + protocol + lvgl 网关应用
+make              # 全编：core 驱动 + dts + lvgl 网关应用
 make core         # 只编译驱动模块
 make dts          # 只编译设备树
-make protocol     # SUMP 工具链（交叉版）；make host 为 PC 自测版
+make lvgl         # 只编译 lvgl 网关应用
 make clean        # 清理 build/
 
 make send         # 部署到开发板（需 sudo 密码）：
-                  #   驱动 .ko + 测试程序 + sump → NFS /lib/modules/4.1.15/
+                  #   驱动 .ko → NFS /lib/modules/4.1.15/
                   #   dtb → TFTP 目录
                   #   lvgl_gateway → NFS /usr/bin/（板端 rcS 自启）
                   #   models/face.param|bin → NFS /root/（SCRFD 精判模型）
@@ -235,17 +243,18 @@ uvicorn server:app --host 0.0.0.0 --port 8000
 
 - [x] P1 LED 字符设备（验收 4/4） · P2 按键中断三种读模式（5/5） · P3 gpio_event 企业级驱动（7/7 + 内核 ftrace）
 - [x] P4 PWM/I2C/SPI 子系统驱动 beep_pwm/ap3216c/icm20608（8/8）
-- [x] P6-1 input 按键驱动（PASS=10） · P6-2/P6-3 SUMP 工具链 + 板端验收（PASS=7，1M 样本零丢失）
+- [x] P6-1 input 按键驱动（PASS=10）· P6-2/P6-3 SUMP 工具链（曾验收通过，协议与测试程序已清理移除）
 - [x] P7-1 GT9147 触摸（中断模式 + 配置自愈） · P5 OV5640 采用内核自带驱动接入
-- 驱动使用与验收脚本见各模块 `test/` 与 `docs/`；SUMP 指南见 `protocol/README.md`
+- 驱动的验收测试程序/脚本已随驱动验证后清理移除，详见各模块设计与 `docs/`
 
 ## 七、文档索引
 
 | 文档 | 内容 |
 |---|---|
+| **`项目文档.md`**（`D:\Desktop\项目\imx6ull_双项目设计\`） | **完整综合文档**：第一编架构设计 / 第二编各功能模块学习（新手教程）/ 第三编功能使用介绍与命令（含板端 IIO 直读、驱动节点操作、云端部署） |
 | `项目进度.md`（仓库上级目录） | 总账本：进度/验收/决策(ADR)/问题记录（**跨会话必读**） |
 | `cloud/README.md` | 云端服务部署、协议表、白名单管理 |
 | `docs/kernel-patches-20260829.md` | 内核补丁档案（CSI/ov5640/配置清单） |
 | `docs/superpowers/specs/` | LVGL 智能安防网关设计书 |
 | `docs/driver-architecture-decision.md` | 驱动架构决策（gpio_event vs input 等） |
-| `protocol/README.md` / `benchmark/README.md` | SUMP 使用指南 / 基准方法学 |
+| `benchmark/README.md` | gpio_event 采集性能基准方法学 |

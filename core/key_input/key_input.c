@@ -2,7 +2,7 @@
 /* 按键 input 子系统驱动（P6，手册 5.15.1）
  * KEY0（GPIO1_IO18）→ 标准 Linux input 事件流（/dev/input/eventX）
  * 与 P2 key_event（自研字符设备）对比：
- *   - 自研：自定义 UAPI + misc 节点，应用需自建工具链（key_test）
+ *   - 自研：自定义 UAPI + misc 节点，应用需自建工具链
  *   - input：标准 input API，evtest/Qt/evdev 直接消费（生态即用）
  * 对比文档：docs/driver-architecture-decision.md
  *

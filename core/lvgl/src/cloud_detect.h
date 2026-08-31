@@ -30,6 +30,15 @@ extern "C" {
 void cloud_detect_set_server(const char *ipport);
 
 /**
+ * 云端复核服务可达性探测（开机就绪上报用）
+ * 向云端服务发起一次轻量 TCP 连接（非阻塞 connect + select 超时），
+ * 确认服务是否在线；不传帧、不改任何状态。
+ * @return 0=服务可达；非0=不可达（断网/服务未启动，云端复核走"本地兜底"）
+ * @note 与 cloud_detect_query 共用连接探测，避免启动时阻塞主线程过久
+ */
+int cloud_detect_ready(void);
+
+/**
  * 上传一帧并获取云端结论（人员检测+类型归一+白名单比对；阻塞，约 0.1~2.5s）
  * @param rgb565 帧数据（RGB565，w*h*2 字节，行连续）
  * @param type   出参：云端入侵类型键 "person"/"animal"/"object"

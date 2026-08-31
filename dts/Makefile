@@ -11,7 +11,9 @@ KERNELDIR := /home/szh/linux/kernel/linux-imx-rel_imx_4.1.15_2.1.0_ga_southbay
 DTS := imx6ull-southbay-emmc.dts
 BUILD_DIR ?= $(CURDIR)/../build
 BUILD_DTS := $(BUILD_DIR)/dts
-DTS_TMP  := $(BUILD_DTS)/$(DTS:.dts=.dts.tmp)
+# 结果 .dtb → build/dts/；预处理中间文件 .dts.tmp → build/cache/dts/
+CACHE_DTS := $(BUILD_DIR)/cache/dts
+DTS_TMP  := $(CACHE_DTS)/$(DTS:.dts=.dts.tmp)
 DTB := $(BUILD_DTS)/$(DTS:.dts=.dtb)
 
 # Use kernel's dtc (not system dtc — may not be installed)
@@ -28,17 +30,18 @@ all: $(DTB)
 
 # Step 1: preprocess #include / #define
 $(DTS_TMP): $(DTS)
-	mkdir -p $(BUILD_DTS)
+	mkdir -p $(CACHE_DTS)
 	$(CPP) $(CPP_FLAGS) $(CPP_INC) -o $@ $<
 
 # Step 2: compile to dtb
 $(DTB): $(DTS_TMP)
+		mkdir -p $(BUILD_DTS)
 		$(DTC) -I dts -O dtb -o $@ \
 			-i $(KERNELDIR)/arch/arm/boot/dts/ \
 			-i $(KERNELDIR)/include/ \
 			$<
 
 clean:
-	rm -rf $(BUILD_DTS)
+	rm -rf $(BUILD_DTS) $(CACHE_DTS)
 
 .PHONY: all clean

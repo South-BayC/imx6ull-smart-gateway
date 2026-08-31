@@ -77,6 +77,15 @@ void detector_init(void);
 void detector_set_verifier(detector_verifier_fn fn);
 
 /**
+ * 本地粗判模型就绪探测（开机预加载 + 就绪上报）
+ * 唤醒一次性加载 SCRFD 模型（ncnn_load_once，幂等）；
+ * 供启动流程在时间轴上报"本地人脸识别就绪/未就绪（降级）"。
+ * @return 0=模型已就绪；非0=未就绪（模型缺失，按"只判有运动"降级语义）
+ * @note 首次调用可能耗时（加载 ~几百 ms），请在启动阶段（LVGL 主循环前）调用
+ */
+int detector_model_ready(void);
+
+/**
  * 粗判命中提交（统一两级管线唯一入口；dev_bridge 冷却节流后调用）
  * @param zone 命中归属分区（0-3）
  * @return 1=已入队精判；0=忙丢弃/无帧（冷却节流兜底，不影响功能）

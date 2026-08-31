@@ -11,6 +11,7 @@
 #include "dev_bridge.h"
 #include "cam_feed.h"
 #include "detector.h"
+#include "cloud_detect.h"
 #include "ui/ui_events.h"
 #include "lvgl/lvgl.h"
 
@@ -594,6 +595,25 @@ void dev_bridge_start(void)
     /* LVGL 主线程消费定时器（200ms） */
     lv_timer_create(bridge_timer_cb, 200, NULL);
     detector_init();
+
+    /* --- 功能初始化就绪上报（时间轴，开机一次） ---
+     * 目的：在布防前让用户确认识别已开启；就绪=正常级别，未就绪=告警级别预警。
+     * 本地粗判：开机预加载 SCRFD 模型（detector_model_ready），避免首次检测才加载——
+     *   就绪 → "本地人脸识别 已就绪"；模型缺失 → 降级"只判有运动"（告警级）。
+     * 云端复核：仅当"云端复核"开关开启时探测服务可达性——
+     *   可达 → "云端复核 已就绪"；不可达 → "云端复核 不可达（本地兜底）"（告警级）。 */
+    if (detector_model_ready() == 0)
+        ui_events_log("本地人脸识别 已就绪", "本地初判", "");
+    else
+        ui_events_log("本地模型未加载（降级-只判有运动）", "本地初判", "medium");
+
+    if (ui_events_cloud_review_on()) {
+        if (cloud_detect_ready() == 0)
+            ui_events_log("云端复核 已就绪", "云端", "");
+        else
+            ui_events_log("云端复核 不可达（本地兜底）", "云端", "medium");
+    }
+
     printf("[BRIDGE] device bridge started\n");
 }
 

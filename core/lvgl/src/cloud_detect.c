@@ -147,3 +147,21 @@ int cloud_detect_query(const uint16_t *rgb565, int w, int h,
     if (strstr(resp, "\"person\":false")) return 0;
     return -1;
 }
+
+int cloud_detect_ready(void)
+{
+    /* 拆分 "IP:端口"（与 query 一致） */
+    char ip[64];
+    int port = 8000;
+    strncpy(ip, s_server, sizeof(ip) - 1);
+    ip[sizeof(ip) - 1] = 0;
+    char *colon = strchr(ip, ':');
+    if (colon) { *colon = 0; port = atoi(colon + 1); }
+
+    /* 轻量 TCP 探测：仅确认服务可达，不收发帧。
+     * 非阻塞 connect + select 超时（死服务 ~2s 快速失败，不挂主线程）。 */
+    int fd = cloud_tcp_connect(ip, port, CLOUD_DETECT_HTTP_TIMEOUT_MS);
+    if (fd < 0) return -1;
+    close(fd);
+    return 0;
+}
