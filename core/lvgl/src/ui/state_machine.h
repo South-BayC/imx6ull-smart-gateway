@@ -77,16 +77,6 @@ typedef enum {
     SM_EVT_ERROR            /**< 错误事件 - 红色 */
 } sm_event_type_t;
 
-/**
- * @brief 操作按钮类型
- */
-typedef enum {
-    SM_BTN_ARM = 0,         /**< 布防按钮 */
-    SM_BTN_DISARM,          /**< 撤防按钮 */
-    SM_BTN_SILENCE,         /**< 消警按钮 */
-    SM_BTN_SETTINGS         /**< 设置按钮 */
-} sm_btn_type_t;
-
 /* ==================== 数据结构 ==================== */
 
 /**

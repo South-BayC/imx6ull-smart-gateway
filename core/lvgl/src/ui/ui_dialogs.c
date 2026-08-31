@@ -101,7 +101,7 @@ static lv_obj_t *make_header(const char *title)
     lv_obj_set_style_radius(cb, 0, 0);
     lv_obj_set_style_pad_all(cb, 0, 0);
     lv_obj_t *cx = lv_label_create(cb);
-    lv_label_set_text(cx, "\xc3\x97");
+    lv_label_set_text(cx, "×");
     lv_obj_set_style_text_font(cx, UI_FONT_CN16, 0);
     lv_obj_set_style_text_color(cx, lv_color_hex(0x8A9AB5), 0);
     lv_obj_center(cx);
@@ -181,7 +181,7 @@ static void add_close_btn(lv_obj_t *dlg)
     lv_obj_set_style_radius(btn, 0, 0);
     lv_obj_set_style_pad_hor(btn, 16, 0);
     lv_obj_t *bl = lv_label_create(btn);
-    lv_label_set_text(bl, "\xe5\x85\xb3\xe9\x97\xad");
+    lv_label_set_text(bl, "关闭");
     lv_obj_set_style_text_font(bl, UI_FONT_CN16, 0);
     lv_obj_set_style_text_color(bl, lv_color_hex(0x8A9AB5), 0);
     lv_obj_center(bl);
@@ -202,7 +202,7 @@ void ui_dialog_zone_detail_show(int zone_idx)
 
     /* Header */
     char title_buf[48];
-    snprintf(title_buf, sizeof(title_buf), "%s \xc2\xb7 \xe5\x88\x86\xe5\x8c\xba\xe8\xaf\xa6\xe6\x83\x85", z->name);
+    snprintf(title_buf, sizeof(title_buf), "%s · 分区详情", z->name);
     make_header(title_buf);
 
     /* Body */
@@ -212,19 +212,19 @@ void ui_dialog_zone_detail_show(int zone_idx)
     const char *state_str = "";
     lv_color_t state_clr = lv_color_hex(0x00D1FF);
     switch (z->state) {
-        case SM_STATE_OFFLINE: state_str = "\xe7\xa6\xbb\xe7\xba\xbf"; state_clr = lv_color_hex(0x5A6A85); break;
-        case SM_STATE_ONLINE:  state_str = "\xe5\x9c\xa8\xe7\xba\xbf"; state_clr = lv_color_hex(0x00D1FF); break;
-        case SM_STATE_ARMED:   state_str = "\xe5\xb8\x83\xe9\x98\xb2\xe4\xb8\xad"; state_clr = lv_color_hex(0x20C997); break;
-        case SM_STATE_ALARM:   state_str = "\xe5\x91\x8a\xe8\xad\xa6"; state_clr = lv_color_hex(0xFF4D4F); break;
+        case SM_STATE_OFFLINE: state_str = "离线"; state_clr = lv_color_hex(0x5A6A85); break;
+        case SM_STATE_ONLINE:  state_str = "在线"; state_clr = lv_color_hex(0x00D1FF); break;
+        case SM_STATE_ARMED:   state_str = "布防中"; state_clr = lv_color_hex(0x20C997); break;
+        case SM_STATE_ALARM:   state_str = "告警"; state_clr = lv_color_hex(0xFF4D4F); break;
     }
 
-    add_row(body, "\xe5\x88\x86\xe5\x8c\xba\xe7\xbc\x96\xe5\x8f\xb7", z->id, lv_color_hex(0xE6EDF7));
-    add_row(body, "\xe5\x88\x86\xe5\x8c\xba\xe5\x90\x8d\xe7\xa7\xb0", z->name, lv_color_hex(0xE6EDF7));
-    add_row(body, "\xe5\xbd\x93\xe5\x89\x8d\xe7\x8a\xb6\xe6\x80\x81", state_str, state_clr);
-    add_row(body, "\xe4\xbc\xa0\xe6\x84\x9f\xe5\x99\xa8\xe7\xb1\xbb\xe5\x9e\x8b", z->sensor, lv_color_hex(0xE6EDF7));
-    add_row(body, "IP \xe5\x9c\xb0\xe5\x9d\x80", z->ip, lv_color_hex(0xE6EDF7));
-    add_row(body, "\xe5\x9b\xba\xe4\xbb\xb6\xe7\x89\x88\xe6\x9c\xac", z->fw, lv_color_hex(0xE6EDF7));
-    add_row(body, "\xe4\xbf\xa1\xe5\x8f\xb7\xe5\xbc\xba\xe5\xba\xa6", z->rssi, lv_color_hex(0xE6EDF7));
+    add_row(body, "分区编号", z->id, lv_color_hex(0xE6EDF7));
+    add_row(body, "分区名称", z->name, lv_color_hex(0xE6EDF7));
+    add_row(body, "当前状态", state_str, state_clr);
+    add_row(body, "传感器类型", z->sensor, lv_color_hex(0xE6EDF7));
+    add_row(body, "IP 地址", z->ip, lv_color_hex(0xE6EDF7));
+    add_row(body, "固件版本", z->fw, lv_color_hex(0xE6EDF7));
+    add_row(body, "信号强度", z->rssi, lv_color_hex(0xE6EDF7));
 
     /* Close button */
     add_close_btn(s_dlg_box);
@@ -244,10 +244,10 @@ void ui_dialog_album_show(const char *title)
     /* Header */
     if (title) {
         char buf[64];
-        snprintf(buf, sizeof(buf), "\xe6\x8a\x93\xe6\x8b\x8d\xe7\x9b\xb8\xe5\x86\x8c \xc2\xb7 %s", title);
+        snprintf(buf, sizeof(buf), "抓拍相册 · %s", title);
         make_header(buf);
     } else {
-        make_header("\xe6\x8a\x93\xe6\x8b\x8d\xe7\x9b\xb8\xe5\x86\x8c");
+        make_header("抓拍相册");
     }
 
     /* Body with 3x2 grid */
@@ -256,7 +256,7 @@ void ui_dialog_album_show(const char *title)
 
     /* Simulated thumbnail data */
     static const char *times[] = {"14:32", "14:28", "14:15", "13:58", "13:42", "13:30"};
-    static const char *levels[] = {"\xe9\xab\x98", "\xe4\xb8\xad", "\xe4\xbd\x8e", "\xe9\xab\x98", "\xe4\xbd\x8e", "\xe4\xb8\xad"};
+    static const char *levels[] = {"高", "中", "低", "高", "低", "中"};
     static const lv_color_t lvl_colors[] = {
         { .blue = 0x4F, .green = 0x4D, .red = 0xFF },  /* red */
         { .blue = 0x20, .green = 0xB0, .red = 0xFF },  /* amber */
@@ -288,7 +288,7 @@ void ui_dialog_album_show(const char *title)
         /* Thumbnail label */
         lv_obj_t *lbl = lv_label_create(thumb);
         char lbl_buf[24];
-        snprintf(lbl_buf, sizeof(lbl_buf), "\xe6\x8a\x93\xe6\x8b\x8d #%d", i + 1);
+        snprintf(lbl_buf, sizeof(lbl_buf), "抓拍 #%d", i + 1);
         lv_label_set_text(lbl, lbl_buf);
         lv_obj_set_style_text_font(lbl, UI_FONT_CN16, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0x5A6A85), 0);
@@ -348,12 +348,12 @@ void ui_dialog_settings_show(void)
     ensure_overlay();
     clear_body();
 
-    make_header("\xe7\xb3\xbb\xe7\xbb\x9f\xe8\xae\xbe\xe7\xbd\xae");
+    make_header("系统设置");
 
     lv_obj_t *body = make_body();
 
     /* --- Display Settings --- */
-    add_section(body, "\xe6\x98\xbe\xe7\xa4\xba\xe8\xae\xbe\xe7\xbd\xae");
+    add_section(body, "显示设置");
 
     lv_obj_t *br = lv_obj_create(body);
     lv_obj_set_size(br, LV_PCT(100), LV_SIZE_CONTENT);
@@ -366,7 +366,7 @@ void ui_dialog_settings_show(void)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *bl = lv_label_create(br);
-    lv_label_set_text(bl, "\xe5\xb1\x8f\xe5\xb9\x95\xe4\xba\xae\xe5\xba\xa6");
+    lv_label_set_text(bl, "屏幕亮度");
     lv_obj_set_style_text_font(bl, UI_FONT_CN16, 0);
     lv_obj_set_style_text_color(bl, lv_color_hex(0x8A9AB5), 0);
 
@@ -386,7 +386,7 @@ void ui_dialog_settings_show(void)
     lv_obj_add_event_cb(bs, on_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     /* --- Audio Settings --- */
-    add_section(body, "\xe9\x9f\xb3\xe9\xa2\x91\xe8\xae\xbe\xe7\xbd\xae");
+    add_section(body, "音频设置");
 
     lv_obj_t *vr = lv_obj_create(body);
     lv_obj_set_size(vr, LV_PCT(100), LV_SIZE_CONTENT);
@@ -399,7 +399,7 @@ void ui_dialog_settings_show(void)
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     lv_obj_t *vl = lv_label_create(vr);
-    lv_label_set_text(vl, "\xe5\x91\x8a\xe8\xad\xa6\xe9\x9f\xb3\xe9\x87\x8f");
+    lv_label_set_text(vl, "告警音量");
     lv_obj_set_style_text_font(vl, UI_FONT_CN16, 0);
     lv_obj_set_style_text_color(vl, lv_color_hex(0x8A9AB5), 0);
 
@@ -419,27 +419,27 @@ void ui_dialog_settings_show(void)
     lv_obj_add_event_cb(vs, on_volume_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     /* --- Network Status --- */
-    add_section(body, "\xe7\xbd\x91\xe7\xbb\x9c\xe7\x8a\xb6\xe6\x80\x81");
-    add_row(body, "\xe4\xbb\xa5\xe5\xa4\xaa\xe7\xbd\x91", "\xe5\x9c\xa8\xe7\xba\xbf", lv_color_hex(0x20C997));
-    add_row(body, "IP \xe5\x9c\xb0\xe5\x9d\x80", "192.168.1.10", lv_color_hex(0x00D1FF));
-    add_row(body, "MQTT \xe6\x9c\x8d\xe5\x8a\xa1\xe5\x99\xa8", "broker.local:1883", lv_color_hex(0x00D1FF));
+    add_section(body, "网络状态");
+    add_row(body, "以太网", "在线", lv_color_hex(0x20C997));
+    add_row(body, "IP 地址", "192.168.1.10", lv_color_hex(0x00D1FF));
+    add_row(body, "MQTT 服务器", "broker.local:1883", lv_color_hex(0x00D1FF));
 
     /* --- Alert Level Config --- */
-    add_section(body, "\xe5\x91\x8a\xe8\xad\xa6\xe5\x88\x86\xe7\xba\xa7\xe9\x85\x8d\xe7\xbd\xae");
-    add_row(body, "\xe9\xab\x98", "\xe5\x85\xa5\xe4\xbe\xb5\xe6\xa3\x80\xe6\xb5\x8b\xe3\x80\x81\xe5\xbc\x82\xe5\xb8\xb8\xe9\x97\xae\xe5\x85\xa5", lv_color_hex(0xFF4D4F));
-    add_row(body, "\xe4\xb8\xad", "\xe4\xbf\xa1\xe5\x8f\xb7\xe5\xbc\xb1\xe3\x80\x81\xe8\xae\xbe\xe5\xa4\x87\xe7\xa6\xbb\xe7\xba\xbf", lv_color_hex(0xFFB020));
-    add_row(body, "\xe4\xbd\x8e", "\xe6\xb8\xa9\xe5\xba\xa6\xe5\x81\x8f\xe9\xab\x98\xe3\x80\x81\xe5\xad\x98\xe5\x82\xa8\xe4\xb8\x8d\xe8\xb6\xb3", lv_color_hex(0x00D1FF));
+    add_section(body, "告警分级配置");
+    add_row(body, "高", "入侵检测、异常问入", lv_color_hex(0xFF4D4F));
+    add_row(body, "中", "信号弱、设备离线", lv_color_hex(0xFFB020));
+    add_row(body, "低", "温度偏高、存储不足", lv_color_hex(0x00D1FF));
 
     /* --- Scheduled Arming --- */
-    add_section(body, "\xe5\xae\x9a\xe6\x97\xb6\xe5\xb8\x83\xe9\x98\xb2");
-    add_row(body, "22:00-06:00 \xe8\x87\xaa\xe5\x8a\xa8\xe5\xb8\x83\xe9\x98\xb2", "\xe5\xb7\xb2\xe5\x90\xaf\xe7\x94\xa8", lv_color_hex(0x20C997));
+    add_section(body, "定时布防");
+    add_row(body, "22:00-06:00 自动布防", "已启用", lv_color_hex(0x20C997));
 
     /* --- About --- */
-    add_section(body, "\xe5\x85\xb3\xe4\xba\x8e");
-    add_row(body, "\xe8\xae\xbe\xe5\xa4\x87\xe5\x9e\x8b\xe5\x8f\xb7", "i.MX6ULL \xe5\xae\x89\xe9\x98\xb2\xe7\xbd\x91\xe5\x85\xb3", lv_color_hex(0x00D1FF));
-    add_row(body, "\xe5\x9b\xba\xe4\xbb\xb6\xe7\x89\x88\xe6\x9c\xac", "v2.3.1", lv_color_hex(0x00D1FF));
-    add_row(body, "\xe5\x86\x85\xe6\xa0\xb8\xe7\x89\x88\xe6\x9c\xac", "Linux 5.4.0", lv_color_hex(0x00D1FF));
-    add_row(body, "\xe5\xad\x98\xe5\x82\xa8\xe7\xa9\xba\xe9\x97\xb4", "14.2GB / 32GB", lv_color_hex(0x00D1FF));
+    add_section(body, "关于");
+    add_row(body, "设备型号", "i.MX6ULL 安防网关", lv_color_hex(0x00D1FF));
+    add_row(body, "固件版本", "v2.3.1", lv_color_hex(0x00D1FF));
+    add_row(body, "内核版本", "Linux 5.4.0", lv_color_hex(0x00D1FF));
+    add_row(body, "存储空间", "14.2GB / 32GB", lv_color_hex(0x00D1FF));
 
     add_close_btn(s_dlg_box);
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);

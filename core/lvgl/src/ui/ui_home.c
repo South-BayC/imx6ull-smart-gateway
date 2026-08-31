@@ -118,9 +118,20 @@ void ui_home_show_capture_toast(void)
 
 void ui_home_add_event(const ui_event_t *ev)
 {
-    if (!s_event_list || !ev || s_event_item_count >= UI_EVENT_MAX) return;
+    if (!s_event_list || !ev) return;
+
+    /* 达到上限时移除最旧条目 (最后一个 child)，保证始终显示最近 UI_EVENT_MAX 条事件 */
+    uint32_t child_cnt = lv_obj_get_child_count(s_event_list);
+    while (child_cnt >= UI_EVENT_MAX) {
+        lv_obj_t *oldest = lv_obj_get_child(s_event_list, child_cnt - 1);
+        if (oldest) lv_obj_delete(oldest);
+        child_cnt = lv_obj_get_child_count(s_event_list);
+        if (s_event_item_count > 0) s_event_item_count--;
+    }
 
     lv_obj_t *item = lv_obj_create(s_event_list);
+    /* 新事件插入到列表顶部 (索引 0)，保证最新事件始终在最上方可见 */
+    lv_obj_move_to_index(item, 0);
     lv_obj_set_size(item, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(item, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(item, 0, 0);

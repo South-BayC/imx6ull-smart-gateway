@@ -43,6 +43,47 @@ static void signal_handler(int sig)
     g_running = false;
 }
 
+/* ==================== 状态机 → UI 桥接 ==================== */
+
+/**
+ * @brief 状态机事件回调 - 将状态机产生的事件桥接到主界面事件时间轴
+ *
+ * 通过 sm_register_event_cb() 注册，状态机每次 add_event() 时触发。
+ * 将通用的 sm_event_t 转换为 UI 层使用的 ui_event_t 后显示到时间轴。
+ *
+ * @param event     状态机新增事件 (非空)
+ * @param user_data 用户数据 (此处未使用)
+ */
+static void on_sm_event(const sm_event_t *event, void *user_data)
+{
+    (void)user_data;
+    if (!event) return;
+
+    ui_event_t ev;
+    ev.type     = event->type;
+    ev.level    = event->level;
+    ev.title    = event->title;
+    ev.location = event->location;
+    ev.hour     = event->hour;
+    ev.minute   = event->minute;
+    ui_home_add_event(&ev);
+}
+
+/**
+ * @brief 回放状态机初始化阶段已产生的事件到时间轴
+ *
+ * sm_init() 在 ui_home_init() 之前执行，期间 add_event() 的事件
+ * 尚未注册回调，不会被实时桥接。此处统一回放，保证时间轴完整。
+ * 按"从旧到新"追加 (最新事件由 ui_home_add_event 置顶)。
+ */
+static void replay_sm_events(void)
+{
+    for (int i = sm_get_event_count() - 1; i >= 0; i--) {
+        const sm_event_t *e = sm_get_event(i);
+        if (e) on_sm_event(e, NULL);
+    }
+}
+
 /* ==================== 主函数 ==================== */
 
 int main(int argc, char *argv[])
@@ -81,9 +122,11 @@ int main(int argc, char *argv[])
     ui_home_init(scr);
     printf("[main] INFO: 主界面构建完成\n");
 
-    /* 可选：注册状态机回调，实时同步 UI (演示用，实际由 ui_home 内部处理) */
-    /* sm_register_state_cb(...); */
-    /* sm_register_event_cb(...); */
+    /* 注册状态机事件回调，实时同步事件时间轴 (布防/撤防/告警/启动等) */
+    sm_register_event_cb(on_sm_event, NULL);
+
+    /* 回放初始化阶段 (sm_init) 已产生的事件 (系统启动/自检/联网等) */
+    replay_sm_events();
 
     printf("[main] INFO: 进入主循环 (Ctrl+C 退出)\n");
     printf("[main] INFO: 目标帧率 >= 25 FPS (周期 <= 40ms)\n");
